@@ -112,6 +112,19 @@ def _result_fingerprint(
     )
 
 
+def _set_controlled_transaction_mode(connection: object, *, dry_run: bool) -> None:
+    """Freeze the target snapshot before locking/re-rendering controlled predicates.
+
+    The target summary deliberately never retains raw primary keys.  Serializable
+    isolation therefore makes the subsequent controlled DML observe the same target
+    snapshot that was fingerprinted and locked; a conflicting phantom causes the
+    whole transaction to abort rather than expanding the approved target set.
+    """
+    connection.execute(text("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"))  # type: ignore[attr-defined]
+    if dry_run:
+        connection.execute(text("SET TRANSACTION READ ONLY"))  # type: ignore[attr-defined]
+
+
 def _record_apply_result(
     connection: object,
     *,
@@ -190,8 +203,7 @@ def apply_plan(
     )
     try:
         with database.begin() as connection:
-            if dry_run:
-                connection.execute(text("SET TRANSACTION READ ONLY"))
+            _set_controlled_transaction_mode(connection, dry_run=dry_run)
             for item in executable:
                 actual_targets = (
                     resolver.resolve_item(connection, item)

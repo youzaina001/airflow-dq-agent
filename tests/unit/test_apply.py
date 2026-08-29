@@ -1,7 +1,35 @@
 import pytest
 
 from airflow_dq_agent.apply import render_step
+from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode
 from airflow_dq_agent.contracts.models import RemediationStep
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, statement: object) -> None:
+        self.statements.append(str(statement))
+
+
+def test_apply_uses_a_serializable_snapshot_before_target_locking() -> None:
+    connection = _RecordingConnection()
+
+    _set_controlled_transaction_mode(connection, dry_run=False)
+
+    assert connection.statements == ["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"]
+
+
+def test_dry_run_uses_the_same_serializable_snapshot_and_read_only_authority() -> None:
+    connection = _RecordingConnection()
+
+    _set_controlled_transaction_mode(connection, dry_run=True)
+
+    assert connection.statements == [
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "SET TRANSACTION READ ONLY",
+    ]
 
 
 def test_renderer_uses_compound_key_and_ignores_claimed_row_count() -> None:
