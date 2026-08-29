@@ -1,0 +1,17 @@
+.git
+.venv
+venv
+__pycache__
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+htmlcov
+logs
+traces/*.jsonl
+*.egg-info
+dist
+build
+.env
+.idea
+.vscode

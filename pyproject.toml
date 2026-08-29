@@ -1,0 +1,119 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "airflow-dq-agent"
+version = "0.1.0"
+description = "Eval-driven data-quality agent on Apache Airflow 3: detect, explain, propose, evaluate, optionally apply."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "airflow-dq-agent contributors" }]
+keywords = ["airflow", "data-quality", "pandera", "pydantic-ai", "evals"]
+classifiers = [
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Framework :: Apache Airflow",
+]
+dependencies = [
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.6,<3",
+  "pydantic-ai-slim[openai,mcp]>=2.0,<3",
+  "polars>=1.17",
+  "pandera[polars]>=0.22",
+  "sqlalchemy>=2.0.36,<3",
+  "psycopg[binary]>=3.2",
+  "fastmcp>=2.10,<4",
+  "pyyaml>=6.0",
+  "sqlglot>=25.0",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+airflow = [
+  "apache-airflow>=3.1.0,<3.3",
+  "apache-airflow-providers-common-ai[openai,mcp,sql]>=0.7.0",
+  "apache-airflow-providers-standard>=1.4.0",
+  "apache-airflow-providers-postgres>=6.0.0",
+  "apache-airflow-providers-common-sql>=1.24.0",
+]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=5.0",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "types-pyyaml>=6.0",
+  "testcontainers[postgres]>=4.8",
+]
+eval = [
+  "pytest>=8.3",
+]
+
+[project.scripts]
+dq-agent = "airflow_dq_agent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/youzaina001/airflow-dq-agent"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airflow_dq_agent"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/airflow_dq_agent", "evals", "README.md", "LICENSE"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests", "dags"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"dags/*" = ["I001"]
+"tests/*" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+  "integration: hits Postgres (testcontainers or TEST_WAREHOUSE_DSN)",
+  "eval: deterministic eval-harness cases (no live LLM)",
+  "live_llm: requires OPENAI_API_KEY and LLM_MODE=live",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["airflow_dq_agent"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 0
+show_missing = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["airflow_dq_agent"]
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = [
+  "pandera.*",
+  "fastmcp.*",
+  "testcontainers.*",
+  "sqlglot.*",
+  "pydantic_ai.*",
+]
+ignore_missing_imports = true

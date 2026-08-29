@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: |
+          ruff check src tests dags
+          ruff format --check src tests dags
+      - name: mypy (strict on src/)
+        run: mypy src/airflow_dq_agent
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Unit tests
+        env:
+          LLM_MODE: stub
+        run: pytest tests/unit -q --tb=short
+
+  eval:
+    # The product. No live key. Stub + recorded-trace fixtures.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Eval suite
+        env:
+          LLM_MODE: stub
+          APPLY_MODE: off
+        run: pytest tests/evals -q --tb=short
+      - name: Demo (suite → stub propose → eval)
+        env:
+          LLM_MODE: stub
+          APPLY_MODE: off
+        run: python -m airflow_dq_agent.cli demo --no-db
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Integration (testcontainers Postgres)
+        env:
+          LLM_MODE: stub
+          APPLY_MODE: off
+        run: pytest tests/integration -q --tb=short

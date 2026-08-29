@@ -1,0 +1,189 @@
+# LocalExecutor Airflow 3.1 + a separate synthetic warehouse.
+# HITL (ApprovalOperator) needs the triggerer on 3.1.x.
+# Default APPLY_MODE=off — the DAG never mutates without a human.
+
+x-airflow-common: &airflow-common
+  build: .
+  image: airflow-dq-agent:3.1.5
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    AIRFLOW__API_AUTH__JWT_SECRET: 'dq-agent-local-jwt-secret-change-me'
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: 'airflow:admin'
+    _AIRFLOW_WWW_USER_USERNAME: airflow
+    _AIRFLOW_WWW_USER_PASSWORD: airflow
+    AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    PYTHONPATH: /opt/airflow/src
+    WAREHOUSE_DSN: postgresql+psycopg://dq:dq@warehouse:5432/warehouse
+    LLM_MODE: ${LLM_MODE:-stub}
+    APPLY_MODE: ${APPLY_MODE:-off}
+    LLM_MODEL: ${LLM_MODEL:-openai:gpt-4.1-mini}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    TRACES_DIR: /opt/airflow/traces
+    AIRFLOW_CONN_WAREHOUSE_POSTGRES: 'postgresql://dq:dq@warehouse:5432/warehouse'
+    AIRFLOW_CONN_PYDANTICAI_DEFAULT: >
+      {
+        "conn_type": "pydanticai",
+        "password": "${OPENAI_API_KEY:-}",
+        "host": "${OPENAI_BASE_URL:-}",
+        "extra": {"model": "${LLM_MODEL:-openai:gpt-4.1-mini}"}
+      }
+    AIRFLOW_CONN_DQ_CATALOG_MCP: >
+      {
+        "conn_type": "mcp",
+        "host": "http://catalog:8000/mcp",
+        "extra": {"transport": "http"}
+      }
+    AIRFLOW__COMMON_AI__DURABLE_CACHE_PATH: file:///tmp/airflow_durable_cache
+  volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
+    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/src:/opt/airflow/src
+    - ${AIRFLOW_PROJ_DIR:-.}/evals:/opt/airflow/evals
+    - ${AIRFLOW_PROJ_DIR:-.}/traces:/opt/airflow/traces
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    warehouse:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 10
+    restart: always
+
+  warehouse:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: dq
+      POSTGRES_PASSWORD: dq
+      POSTGRES_DB: warehouse
+    ports:
+      - "5433:5432"
+    volumes:
+      - warehouse_pg:/var/lib/postgresql/data
+      - ./src/airflow_dq_agent/warehouse/ddl.sql:/docker-entrypoint-initdb.d/01_ddl.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "dq", "-d", "warehouse"]
+      interval: 10s
+      retries: 10
+    restart: always
+
+  catalog:
+    image: airflow-dq-agent:3.1.5
+    build: .
+    user: "${AIRFLOW_UID:-50000}:0"
+    environment:
+      PYTHONPATH: /opt/airflow/src
+      WAREHOUSE_DSN: postgresql+psycopg://dq:dq@warehouse:5432/warehouse
+      CATALOG_MCP_HOST: 0.0.0.0
+      CATALOG_MCP_PORT: 8000
+    volumes:
+      - ./src:/opt/airflow/src
+    ports:
+      - "8000:8000"
+    command: >
+      python -m airflow_dq_agent.catalog.mcp_server
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    restart: always
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins /sources/config /sources/traces
+        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins,config,traces}
+        exec /entrypoint airflow version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+    user: "0:0"
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}:/sources
+
+volumes:
+  airflow_pg:
+  warehouse_pg:

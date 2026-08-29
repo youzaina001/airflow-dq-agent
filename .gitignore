@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.local
+
+# Tools
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Airflow local
+logs/
+airflow.db
+airflow.cfg
+simple_auth_manager_passwords.json.generated
+
+# Runtime artefacts
+traces/*.jsonl
+traces/*.json
+!traces/.gitkeep
+.replay/
+
+# Docker / compose
+postgres-data/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
