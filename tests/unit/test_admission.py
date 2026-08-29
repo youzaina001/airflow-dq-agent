@@ -14,6 +14,7 @@ from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
+from airflow_dq_agent.quality.registry import CHECK_SPECS
 
 
 class _TargetSets:
@@ -69,3 +70,40 @@ def test_approved_evaluated_plan_receives_time_bounded_apply_admission() -> None
 
     with pytest.raises(PermissionError, match="requires an apply admission"):
         apply_plan(plan, evaluation, dry_run=False)
+
+
+def test_policy_drift_blocks_mutation_before_a_database_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = seeded_failure_report()
+    failed = report.get("fact_orders.total_amount.completeness")
+    assert failed is not None
+    scoped_report = report.model_copy(update={"checks": [failed]})
+    candidate = Proposal(
+        summary="Quarantine failed rows.",
+        root_cause_hypothesis="A required value was omitted.",
+        candidate_actions=[
+            CandidateAction(
+                action_id="quarantine_nulls",
+                evidence=[
+                    QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                ],
+                rationale="Preserve source rows for review.",
+            )
+        ],
+        confidence=0.9,
+    )
+    plan = compile_remediation_plan(scoped_report, candidate, target_sets=_TargetSets())
+    evaluation = evaluate_plan(plan)
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        HumanDecision(decision="Approve", actor="approver-1", note="Reviewed target set."),
+    )
+    spec = CHECK_SPECS[failed.check_id]
+    monkeypatch.setitem(
+        CHECK_SPECS, failed.check_id, spec.model_copy(update={"description": "drift"})
+    )
+
+    with pytest.raises(PermissionError, match="policy snapshot drifted"):
+        apply_plan(plan, evaluation, admission, dry_run=False)

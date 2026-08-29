@@ -318,7 +318,8 @@ def run_quality_suite(dsn: str | None = None) -> QualitySuiteReport:
     # In HITL mode this is a required Postgres audit write; shadow mode retains the
     # supplementary JSONL event only.  Either way per-check samples never leave the
     # quality process for durable audit.
+    from airflow_dq_agent.config import get_settings
     from airflow_dq_agent.traces import record_quality_report
 
-    event = record_quality_report(report, dsn=dsn)
+    event = record_quality_report(report, dsn=get_settings().audit_dsn)
     return report.model_copy(update={"audit_event_id": event.event_id})
