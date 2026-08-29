@@ -119,6 +119,7 @@ def dq_daily() -> None:
         evaluation = evaluate_plan(plan)
         event = evaluation_event(plan, evaluation, str(plan_data["plan_event_id"]))
         append_event(event)
+        evaluation = evaluation.model_copy(update={"audit_event_id": event.event_id})
         return {
             "plan": plan.model_dump(mode="json"),
             "plan_event_id": plan_data["plan_event_id"],

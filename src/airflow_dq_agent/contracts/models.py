@@ -248,6 +248,7 @@ class EvalScore(BaseModel):
 
 class EvalReport(BaseModel):
     evaluation_id: str = Field(default_factory=lambda: uuid4().hex)
+    audit_event_id: str | None = None
     plan_id: str | None = None
     plan_fingerprint: str | None = None
     policy_fingerprint: str | None = None

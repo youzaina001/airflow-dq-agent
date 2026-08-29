@@ -175,7 +175,11 @@ def apply_result_event(
     return _event(
         "dry_run" if dry_run else "apply_succeeded",
         quality_run_id=plan.quality_run_id,
-        predecessor_ids=[admission.decision_event_id if admission else evaluation.evaluation_id],
+        predecessor_ids=[
+            admission.decision_event_id
+            if admission
+            else (evaluation.audit_event_id or evaluation.evaluation_id)
+        ],
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
         policy_fingerprint=admission.policy_fingerprint if admission else plan.policy_fingerprint,
