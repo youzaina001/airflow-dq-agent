@@ -1,0 +1,6 @@
+name: green_warehouse_spurious_proposal
+report: green
+proposal: spurious_null_fill
+expected_pass: false
+expected_failed_scores:
+  - groundedness

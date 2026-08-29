@@ -1,0 +1,4 @@
+name: replay_completeness
+report: seeded_failures
+proposal: replay
+expected_pass: true

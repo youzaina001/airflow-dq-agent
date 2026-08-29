@@ -1,0 +1,50 @@
+{
+  "kind": "agent_run",
+  "proposal": {
+    "summary": "Recorded allow-listed alert proposal for replay coverage.",
+    "failing_check_ids": [
+      "fact_orders.total_amount.completeness",
+      "fact_orders.status.validity",
+      "fact_orders.order_nk.uniqueness",
+      "fact_order_items.product_sk.referential_integrity",
+      "dim_customer.email.validity",
+      "dim_customer.schema_drift",
+      "dim_patient.sex.completeness",
+      "dim_patient.subject_id.uniqueness",
+      "fact_visits.visit_date.validity",
+      "fact_visits.patient_sk.referential_integrity",
+      "fact_adverse_events.term_code.completeness",
+      "fact_adverse_events.severity.validity"
+    ],
+    "root_cause_hypothesis": "Recorded fixture uses non-mutating alerts only.",
+    "citations": [
+      {"check_id": "fact_orders.total_amount.completeness", "contract_id": "warehouse.fact_orders", "evidence": "five null amounts"},
+      {"check_id": "fact_orders.status.validity", "contract_id": "warehouse.fact_orders", "evidence": "three illegal statuses"},
+      {"check_id": "fact_orders.order_nk.uniqueness", "contract_id": "warehouse.fact_orders", "evidence": "two duplicate grain rows"},
+      {"check_id": "fact_order_items.product_sk.referential_integrity", "contract_id": "warehouse.fact_order_items", "evidence": "three product orphans"},
+      {"check_id": "dim_customer.email.validity", "contract_id": "warehouse.dim_customer", "evidence": "two malformed emails"},
+      {"check_id": "dim_customer.schema_drift", "contract_id": "warehouse.dim_customer", "evidence": "one extra column"},
+      {"check_id": "dim_patient.sex.completeness", "contract_id": "warehouse.dim_patient", "evidence": "one null sex"},
+      {"check_id": "dim_patient.subject_id.uniqueness", "contract_id": "warehouse.dim_patient", "evidence": "two duplicate subjects"},
+      {"check_id": "fact_visits.visit_date.validity", "contract_id": "warehouse.fact_visits", "evidence": "four window violations"},
+      {"check_id": "fact_visits.patient_sk.referential_integrity", "contract_id": "warehouse.fact_visits", "evidence": "two patient orphans"},
+      {"check_id": "fact_adverse_events.term_code.completeness", "contract_id": "warehouse.fact_adverse_events", "evidence": "three null terms"},
+      {"check_id": "fact_adverse_events.severity.validity", "contract_id": "warehouse.fact_adverse_events", "evidence": "two illegal severities"}
+    ],
+    "steps": [
+      {"action_id": "no_op_alert", "table": "fact_orders", "params": {"check_id": "fact_orders.total_amount.completeness"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "fact_orders", "params": {"check_id": "fact_orders.status.validity"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "fact_orders", "params": {"check_id": "fact_orders.order_nk.uniqueness"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "fact_order_items", "params": {"check_id": "fact_order_items.product_sk.referential_integrity"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "dim_customer", "params": {"check_id": "dim_customer.email.validity"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "dim_customer", "params": {"check_id": "dim_customer.schema_drift"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "dim_patient", "params": {"check_id": "dim_patient.sex.completeness"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "dim_patient", "params": {"check_id": "dim_patient.subject_id.uniqueness"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "fact_visits", "params": {"check_id": "fact_visits.visit_date.validity"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "fact_visits", "params": {"check_id": "fact_visits.patient_sk.referential_integrity"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "fact_adverse_events", "params": {"check_id": "fact_adverse_events.term_code.completeness"}, "rationale": "recorded alert", "sql_preview": "-- alert"},
+      {"action_id": "no_op_alert", "table": "fact_adverse_events", "params": {"check_id": "fact_adverse_events.severity.validity"}, "rationale": "recorded alert", "sql_preview": "-- alert"}
+    ],
+    "confidence": 0.8
+  }
+}

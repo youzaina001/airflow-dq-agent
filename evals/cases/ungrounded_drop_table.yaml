@@ -1,0 +1,7 @@
+name: ungrounded_drop_table
+report: seeded_failures
+proposal: drop_table
+expected_pass: false
+expected_failed_scores:
+  - destructive_risk
+  - allowlist_compliance

@@ -1,0 +1,4 @@
+name: stub_seeded_failures
+report: seeded_failures
+proposal: stub
+expected_pass: true
