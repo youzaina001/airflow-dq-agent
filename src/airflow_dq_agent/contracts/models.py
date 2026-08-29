@@ -206,6 +206,22 @@ class RemediationPlan(BaseModel):
     compiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ApplyAdmission(BaseModel):
+    """A time-bounded authorization for exactly one evaluated remediation plan."""
+
+    admission_id: str = Field(default_factory=lambda: uuid4().hex)
+    quality_run_id: str = Field(min_length=1)
+    plan_id: str = Field(min_length=1)
+    plan_fingerprint: str = Field(min_length=1)
+    evaluation_id: str = Field(min_length=1)
+    evaluation_fingerprint: str = Field(min_length=1)
+    decision_id: str = Field(min_length=1)
+    policy_fingerprint: str = Field(min_length=1)
+    issued_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    expires_at: datetime
+    fingerprint: str = Field(min_length=1)
+
+
 class Proposal(BaseModel):
     """Structured agent output. Free text is not a contract."""
 
@@ -246,6 +262,10 @@ class EvalScore(BaseModel):
 
 
 class EvalReport(BaseModel):
+    evaluation_id: str = Field(default_factory=lambda: uuid4().hex)
+    plan_id: str | None = None
+    plan_fingerprint: str | None = None
+    fingerprint: str | None = None
     passed: bool
     scores: list[EvalScore]
     blocked_reasons: list[str] = Field(default_factory=list)
@@ -259,8 +279,9 @@ class EvalReport(BaseModel):
 
 
 class HumanDecision(BaseModel):
+    decision_id: str = Field(default_factory=lambda: uuid4().hex)
     decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    decision: Literal["Approve", "Reject", "shadow_skip"]
+    decision: Literal["Approve", "Reject", "Timeout", "shadow_skip"]
     actor: str = "airflow-hitl"
     note: str | None = None
 

@@ -6,13 +6,15 @@ import hashlib
 import json
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 
 def canonical_json(value: Any) -> str:
     """Serialize governed data deterministically before it is fingerprinted."""
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="json")
+    else:
+        value = TypeAdapter(Any).dump_python(value, mode="json")
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 

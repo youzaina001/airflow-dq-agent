@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from airflow_dq_agent.config import get_settings
+from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
     FORBIDDEN_SQL_TOKENS,
     DestructiveRank,
@@ -14,9 +15,11 @@ from airflow_dq_agent.contracts.models import (
     EvalScore,
     Proposal,
     QualitySuiteReport,
+    RemediationPlan,
 )
 from airflow_dq_agent.contracts.remediations import REMEDIATION_CATALOG, validate_step_params
 from airflow_dq_agent.contracts.tables import get_table_contract
+from airflow_dq_agent.planning import current_policy_fingerprint
 
 _DESTRUCTIVE_TOKENS = (*FORBIDDEN_SQL_TOKENS, "DELETE")
 
@@ -213,4 +216,66 @@ def evaluate_proposal(
     )
     return EvalReport(
         passed=passed, scores=scores, blocked_reasons=blocked, summary_markdown=summary
+    )
+
+
+def evaluate_plan(plan: RemediationPlan) -> EvalReport:
+    """Evaluate a compiled plan, never a candidate's text, SQL, or parameters."""
+    executable = [item for item in plan.items if item.kind == "executable"]
+    compilation_ok = not plan.blocked and len(executable) == len(plan.items)
+    compilation = _score(
+        "plan_compilation",
+        1.0 if compilation_ok else 0.0,
+        1.0,
+        "Every failed check is covered by an executable controlled plan item."
+        if compilation_ok
+        else "The remediation plan contains explicit blocked or omitted outcomes.",
+        blocked_reasons=plan.blocked_reasons,
+    )
+    policy_ok = current_policy_fingerprint(plan) == plan.policy_fingerprint
+    policy = _score(
+        "policy_snapshot",
+        1.0 if policy_ok else 0.0,
+        1.0,
+        "The compiled plan still matches the current check policy and renderer."
+        if policy_ok
+        else "Check policy, table contract, remediation rule, or renderer drifted after compilation.",
+    )
+    target_errors = [
+        item.item_id
+        for item in executable
+        if item.target_set.count < 0 or not item.target_set.fingerprint
+    ]
+    targets = _score(
+        "target_set_integrity",
+        1.0 if not target_errors else 0.0,
+        1.0,
+        "Every executable item has an exact target-set count and fingerprint."
+        if not target_errors
+        else "An executable plan item has no valid target-set summary.",
+        item_ids=target_errors,
+    )
+    scores = [compilation, policy, targets]
+    blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
+    passed = not blocked
+    summary = "## Remediation plan evaluation\n\n" + (
+        "PASS — eligible for whole-plan HITL." if passed else "BLOCKED — do not admit this plan."
+    )
+    fingerprint = canonical_fingerprint(
+        {
+            "plan_id": plan.plan_id,
+            "plan_fingerprint": plan.fingerprint,
+            "passed": passed,
+            "scores": [score.model_dump(mode="json") for score in scores],
+            "blocked_reasons": blocked,
+        }
+    )
+    return EvalReport(
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        fingerprint=fingerprint,
+        passed=passed,
+        scores=scores,
+        blocked_reasons=blocked,
+        summary_markdown=summary,
     )

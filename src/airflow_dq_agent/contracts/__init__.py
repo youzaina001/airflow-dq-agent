@@ -1,4 +1,5 @@
 from airflow_dq_agent.contracts.models import (
+    ApplyAdmission,
     CandidateAction,
     CheckResult,
     Citation,
@@ -22,6 +23,7 @@ from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS, TableContract, ge
 
 __all__ = [
     "TABLE_CONTRACTS",
+    "ApplyAdmission",
     "CandidateAction",
     "CheckResult",
     "Citation",

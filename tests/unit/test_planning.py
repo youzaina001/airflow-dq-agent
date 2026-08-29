@@ -1,4 +1,14 @@
-from airflow_dq_agent.contracts import CandidateAction, Proposal, QualityEvidence, TargetSet
+import pytest
+
+from airflow_dq_agent.apply import render_plan_item
+from airflow_dq_agent.contracts import (
+    CandidateAction,
+    ExecutablePlanItem,
+    NonExecutablePlanItem,
+    Proposal,
+    QualityEvidence,
+    TargetSet,
+)
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 
@@ -44,3 +54,42 @@ def test_compiler_creates_an_executable_item_from_declared_check_policy() -> Non
     assert item.target_set == TargetSet(count=5, fingerprint="targets:orders-null-v1")
     assert item.policy_fingerprint
     assert "target_keys" not in plan.model_dump_json()
+
+
+def test_plan_renderer_accepts_only_executable_compiled_items() -> None:
+    item = ExecutablePlanItem(
+        item_id="candidate-0",
+        action_id="quarantine_nulls",
+        table="fact_orders",
+        params={"column": "total_amount", "pk_column": "order_id"},
+        evidence=[
+            QualityEvidence(
+                check_id="fact_orders.total_amount.completeness",
+                contract_id="warehouse.fact_orders",
+            )
+        ],
+        target_set=TargetSet(count=5, fingerprint="targets:orders-null-v1"),
+        policy_fingerprint="policy:orders-null-v1",
+    )
+
+    rendered = render_plan_item(item, run_id="test-run")
+
+    assert (
+        rendered.target_sql
+        == 'SELECT t."order_id" FROM "warehouse"."fact_orders" t WHERE t."total_amount" IS NULL ORDER BY t."order_id"'
+    )
+    assert "FOR UPDATE" not in rendered.target_sql
+    assert rendered.params["run_id"] == "test-run"
+    with pytest.raises(ValueError, match="non-executable"):
+        render_plan_item(
+            NonExecutablePlanItem(
+                item_id="omitted-failures",
+                evidence=[
+                    QualityEvidence(
+                        check_id="fact_orders.total_amount.completeness",
+                        contract_id="warehouse.fact_orders",
+                    )
+                ],
+                reason="candidate proposal omitted failed-check coverage",
+            )
+        )

@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from airflow_dq_agent.contracts.models import (
     FORBIDDEN_SQL_TOKENS,
     DestructiveRank,
+    ExecutablePlanItem,
+    NonExecutablePlanItem,
     Proposal,
     RemediationStep,
 )
@@ -29,6 +31,8 @@ class RenderedStep(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     estimate_sql: str | None = None
     estimate_params: dict[str, Any] = Field(default_factory=dict)
+    target_sql: str | None = None
+    target_params: dict[str, Any] = Field(default_factory=dict)
 
 
 def _quote(identifier: str) -> str:
@@ -124,15 +128,17 @@ def _copy_sql(
     where_clause: str,
     *,
     join_clause: str = "",
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     table = _qualified(contract)
+    pk = _quote(contract.primary_key[0])
     return (
         "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
         "SELECT :run_id, :table_name, jsonb_build_object(:pk_key, t."
-        + _quote(contract.primary_key[0])
+        + pk
         + "), :reason, to_jsonb(t)\n"
         + f"FROM {table} t{join_clause}\nWHERE {where_clause}",
         f"SELECT COUNT(*) FROM {table} t{join_clause} WHERE {where_clause}",
+        f"SELECT t.{pk} FROM {table} t{join_clause} WHERE {where_clause} ORDER BY t.{pk}",
     )
 
 
@@ -158,7 +164,7 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
         return _render_no_op(step, contract)
     if step.action_id == "quarantine_nulls":
         column = _quote(str(step.params["column"]))
-        sql, estimate_sql = _copy_sql(contract, f"t.{column} IS NULL")
+        sql, estimate_sql, target_sql = _copy_sql(contract, f"t.{column} IS NULL")
         return RenderedStep(
             action_id=step.action_id,
             table=contract.table,
@@ -166,10 +172,11 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
             params=common,
             estimate_sql=estimate_sql,
             estimate_params=common,
+            target_sql=target_sql,
         )
     if step.action_id == "quarantine_invalids":
         check_id = str(step.params["check_id"])
-        sql, estimate_sql = _copy_sql(contract, _invalid_predicate(check_id))
+        sql, estimate_sql, target_sql = _copy_sql(contract, _invalid_predicate(check_id))
         return RenderedStep(
             action_id=step.action_id,
             table=contract.table,
@@ -177,6 +184,7 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
             params=common,
             estimate_sql=estimate_sql,
             estimate_params=common,
+            target_sql=target_sql,
         )
     if step.action_id == "quarantine_orphans":
         ref = get_table_contract(str(step.params["ref_table"]))
@@ -184,7 +192,9 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
         ref_column = _quote(str(step.params["ref_column"]))
         ref_table = _qualified(ref)
         join = f" LEFT JOIN {ref_table} r ON r.{ref_column} = t.{fk}"
-        sql, estimate_sql = _copy_sql(contract, f"r.{ref_column} IS NULL", join_clause=join)
+        sql, estimate_sql, target_sql = _copy_sql(
+            contract, f"r.{ref_column} IS NULL", join_clause=join
+        )
         return RenderedStep(
             action_id=step.action_id,
             table=contract.table,
@@ -192,6 +202,7 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
             params=common,
             estimate_sql=estimate_sql,
             estimate_params=common,
+            target_sql=target_sql,
         )
     if step.action_id == "dedupe_keep_min_pk":
         business_key = step.params["business_key"]
@@ -199,7 +210,7 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
         quoted_keys = ", ".join(f"s.{_quote(str(column))}" for column in key_columns)
         pk = _quote(str(step.params["pk_column"]))
         where = f"t.{pk} NOT IN (SELECT MIN(s.{pk}) FROM {table} s GROUP BY {quoted_keys})"
-        sql, estimate_sql = _copy_sql(contract, where)
+        sql, estimate_sql, target_sql = _copy_sql(contract, where)
         return RenderedStep(
             action_id=step.action_id,
             table=contract.table,
@@ -207,6 +218,7 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
             params=common,
             estimate_sql=estimate_sql,
             estimate_params=common,
+            target_sql=target_sql,
         )
     if step.action_id == "null_fill":
         column_name = str(step.params["column"])
@@ -214,6 +226,8 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
         fill_value = _coerce_fill_value(contract, column_name, step.params["fill_value"])
         sql = f"UPDATE {table} SET {column} = :fill_value WHERE {column} IS NULL"
         estimate_sql = f"SELECT COUNT(*) FROM {table} t WHERE t.{column} IS NULL"
+        pk = _quote(contract.primary_key[0])
+        target_sql = f"SELECT t.{pk} FROM {table} t WHERE t.{column} IS NULL ORDER BY t.{pk}"
         params = {"fill_value": fill_value}
         return RenderedStep(
             action_id=step.action_id,
@@ -222,6 +236,7 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
             params=params,
             estimate_sql=estimate_sql,
             estimate_params={},
+            target_sql=target_sql,
         )
     raise ValueError(f"No renderer exists for action {step.action_id!r}")
 
@@ -229,3 +244,30 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
 def render_proposal(proposal: Proposal, *, run_id: str = "dry-run") -> list[RenderedStep]:
     """Render all steps without consulting proposal row estimates or proposal SQL."""
     return [render_step(step, run_id=run_id) for step in proposal.steps]
+
+
+def render_plan_item(
+    item: ExecutablePlanItem | NonExecutablePlanItem, *, run_id: str = "dry-run"
+) -> RenderedStep:
+    """Render one compiled item without accepting candidate text or SQL previews."""
+    if not isinstance(item, ExecutablePlanItem):
+        raise ValueError("Cannot render a non-executable remediation plan item")
+    return render_controlled_action(
+        action_id=item.action_id, table=item.table, params=item.params, run_id=run_id
+    )
+
+
+def render_controlled_action(
+    *, action_id: str, table: str, params: dict[str, Any], run_id: str = "dry-run"
+) -> RenderedStep:
+    """Render policy-derived fields only; this is the target-set resolver's input."""
+    action = get_action(action_id)
+    controlled = RemediationStep(
+        action_id=action_id,
+        table=table,
+        params=params,
+        reversible=action.reversible,
+        destructive_rank=action.destructive_rank,
+        rationale="Compiled from check policy.",
+    )
+    return render_step(controlled, run_id=run_id)

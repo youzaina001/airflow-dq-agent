@@ -48,6 +48,17 @@ def _policy_fingerprint(specs: Sequence[CheckSpec], action_id: str) -> str:
     )
 
 
+def current_policy_fingerprint(plan: RemediationPlan) -> str:
+    """Fingerprint the policy currently governing an already compiled plan."""
+    item_fingerprints: list[str] = []
+    for item in plan.items:
+        if not isinstance(item, ExecutablePlanItem):
+            continue
+        specs = [get_check_spec(evidence.check_id) for evidence in item.evidence]
+        item_fingerprints.append(_policy_fingerprint(specs, item.action_id))
+    return canonical_fingerprint(item_fingerprints)
+
+
 def _params_from_policy(spec: CheckSpec, action_id: str) -> dict[str, object]:
     """Derive every renderer input from controlled policy and the table contract."""
     rule = spec.rule_for(action_id)
