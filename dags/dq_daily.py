@@ -6,12 +6,11 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from airflow.exceptions import AirflowSkipException
-from airflow.providers.standard.operators.hitl import ApprovalOperator
 from airflow.sdk import dag, task
-from airflow.utils.trigger_rule import TriggerRule
 
 from airflow_dq_agent.agent import build_read_only_toolset, run_proposal_agent
 from airflow_dq_agent.agent.runner import build_prompt
+from airflow_dq_agent.airflow_hitl import AuditedApprovalOperator
 from airflow_dq_agent.apply import apply_plan
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts import (
@@ -23,7 +22,6 @@ from airflow_dq_agent.contracts import (
     RemediationPlan,
 )
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
-from airflow_dq_agent.hitl import audit_approval_decision
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
@@ -144,20 +142,6 @@ def dq_daily() -> None:
                     "No passing executable remediation plan requires approval"
                 )
 
-        @task(trigger_rule=TriggerRule.ALL_DONE)
-        def audit_approval_task(
-            evaluation_data: dict[str, Any], approval_output: dict[str, Any]
-        ) -> dict[str, Any]:
-            plan = RemediationPlan.model_validate(evaluation_data["plan"])
-            decision = audit_approval_decision(
-                approval_output,
-                approver_ids=settings.hitl_approver_id_set,
-                quality_run_id=plan.quality_run_id,
-                predecessor=str(evaluation_data["evaluation_event_id"]),
-                persist=append_event,
-            )
-            return decision.model_dump(mode="json")
-
         @task
         def admit_apply_task(
             evaluation_data: dict[str, Any], decision_data: dict[str, Any]
@@ -188,10 +172,16 @@ def dq_daily() -> None:
             return result.model_dump(mode="json")
 
         approval_gate = require_approval(evaluated)
-        approval = ApprovalOperator(
+        approval = AuditedApprovalOperator(
             task_id="approve_remediation_plan",
             subject="Approve governed DQ remediation plan",
             body="Evaluation passed. Approve the whole plan or reject it. A note is required.",
+            quality_run_id="{{ ti.xcom_pull(task_ids='run_suite_task')['run_id'] }}",
+            predecessor_event_id=(
+                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation_event_id'] }}"
+            ),
+            approver_ids=settings.hitl_approver_id_set,
+            audit_dsn=settings.audit_dsn,
             defaults="Reject",
             fail_on_reject=False,
             assigned_users=settings.hitl_assigned_users,
@@ -205,8 +195,7 @@ def dq_daily() -> None:
             response_timeout=timedelta(hours=24),
         )
         approval_gate >> approval
-        decision = audit_approval_task(evaluated, approval.output)
-        admission = admit_apply_task(evaluated, decision)
+        admission = admit_apply_task(evaluated, approval.output)
         apply_after_admission_task(evaluated, admission)
 
 

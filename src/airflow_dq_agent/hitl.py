@@ -77,3 +77,24 @@ def audit_approval_decision(
     event = decision_event(quality_run_id, decision, predecessor)
     persist(event)
     return decision.model_copy(update={"audit_event_id": event.event_id})
+
+
+def audit_then_complete_approval(
+    output: Mapping[str, Any],
+    *,
+    approver_ids: Set[str],
+    quality_run_id: str,
+    predecessor: AuditEvent | str,
+    persist: Callable[[AuditEvent], None],
+    complete_provider: Callable[[], object],
+) -> HumanDecision:
+    """Durably audit the outcome before the provider can branch or skip tasks."""
+    decision = audit_approval_decision(
+        output,
+        approver_ids=approver_ids,
+        quality_run_id=quality_run_id,
+        predecessor=predecessor,
+        persist=persist,
+    )
+    complete_provider()
+    return decision
