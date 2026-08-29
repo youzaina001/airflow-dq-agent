@@ -1,4 +1,4 @@
-"""Proposal evals that hold the agent accountable to the quality report and contracts."""
+"""Deterministic candidate and remediation-plan evaluation gates."""
 
 from __future__ import annotations
 
@@ -9,19 +9,16 @@ from pydantic import ValidationError
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
-    FORBIDDEN_SQL_TOKENS,
-    DestructiveRank,
     EvalReport,
     EvalScore,
     Proposal,
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.contracts.remediations import REMEDIATION_CATALOG, validate_step_params
-from airflow_dq_agent.contracts.tables import get_table_contract
+from airflow_dq_agent.contracts.remediations import REMEDIATION_CATALOG
 from airflow_dq_agent.planning import current_policy_fingerprint
 
-_DESTRUCTIVE_TOKENS = (*FORBIDDEN_SQL_TOKENS, "DELETE")
+_DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
 
 
 def _score(name: str, score: float, threshold: float, rationale: str, **details: Any) -> EvalScore:
@@ -42,44 +39,40 @@ def _parse_proposal(proposal: Proposal | dict[str, Any]) -> tuple[Proposal | Non
             "schema_validity",
             0.0,
             1.0,
-            "Proposal does not satisfy the Pydantic output contract.",
+            "Candidate Proposal does not satisfy the Pydantic output contract.",
             errors=exc.errors(include_url=False),
         )
     return parsed, _score(
-        "schema_validity", 1.0, 1.0, "Proposal satisfies the Pydantic output contract."
+        "schema_validity", 1.0, 1.0, "Candidate Proposal satisfies the Pydantic output contract."
     )
 
 
-def _citation_score(report: QualitySuiteReport, proposal: Proposal, threshold: float) -> EvalScore:
-    failing = set(report.failing_check_ids)
-    report_ids = report.check_ids
-    cited = proposal.cited_check_ids()
-    missing = sorted(failing - cited)
-    unknown = sorted(cited - report_ids)
-    mismatched_contracts = sorted(
-        citation.check_id
-        for citation in proposal.citations
-        if (check := report.get(citation.check_id)) is not None
-        and citation.contract_id != check.contract_id
+def _evidence_score(report: QualitySuiteReport, proposal: Proposal, threshold: float) -> EvalScore:
+    failures = {check.check_id: check.contract_id for check in report.failed_checks}
+    evidence = [item for action in proposal.candidate_actions for item in action.evidence]
+    unknown = sorted(item.check_id for item in evidence if item.check_id not in failures)
+    mismatched = sorted(
+        item.check_id
+        for item in evidence
+        if item.check_id in failures and item.contract_id != failures[item.check_id]
     )
-    if not failing:
-        valid = not cited and not proposal.failing_check_ids
+    if not failures:
+        valid = not proposal.candidate_actions
         score = 1.0 if valid else 0.0
-    elif unknown or mismatched_contracts:
+    elif unknown or mismatched:
         score = 0.0
     else:
-        score = (len(failing) - len(missing)) / len(failing)
-    rationale = "All failed checks are cited with report-backed contract IDs."
-    if score < threshold:
-        rationale = "Citations are incomplete, invented, or use a mismatched contract ID."
+        cited = {item.check_id for item in evidence}
+        score = len(cited & set(failures)) / len(failures)
     return _score(
         "citation_quality",
         score,
         threshold,
-        rationale,
-        missing=missing,
+        "Candidate evidence refers only to failed checks with matching contract identities."
+        if score >= threshold
+        else "Candidate evidence is incomplete, invented, or has a mismatched contract identity.",
         unknown=unknown,
-        mismatched_contracts=mismatched_contracts,
+        mismatched_contracts=mismatched,
     )
 
 
@@ -87,135 +80,91 @@ def _groundedness_score(
     report: QualitySuiteReport, proposal: Proposal, threshold: float
 ) -> EvalScore:
     errors: list[str] = []
-    failing = set(report.failing_check_ids)
-    declared = set(proposal.failing_check_ids)
-    invented = sorted(declared - report.check_ids)
-    non_failing = sorted(declared - failing)
-    if invented:
-        errors.append(f"invented failing check IDs: {invented}")
-    if non_failing:
-        errors.append(f"proposal labels passing checks as failing: {non_failing}")
-    if not report.failed_count and proposal.steps:
-        errors.append("green quality report cannot have remediation steps")
-    for step in proposal.steps:
-        step_check_id = step.params.get("check_id")
-        if step_check_id is not None:
-            check = report.get(step_check_id) if isinstance(step_check_id, str) else None
-            if check is None or not check.failed:
-                errors.append(
-                    f"{step.action_id} references a check that is not failed in this report"
-                )
-        try:
-            contract = get_table_contract(step.table)
-        except KeyError as exc:
-            errors.append(str(exc))
-            continue
-        for key in ("column", "pk_column", "fk_column", "business_key"):
-            value = step.params.get(key)
-            values = value if key == "business_key" and isinstance(value, list) else [value]
-            for column in values:
-                if column is not None and (
-                    not isinstance(column, str) or not contract.has_column(column)
-                ):
-                    errors.append(f"{step.table}.{column!r} is not a contracted identifier")
-        violations = validate_step_params(step.action_id, step.table, step.params)
-        errors.extend(f"{step.action_id}: {violation}" for violation in violations)
-    score = 1.0 if not errors else 0.0
+    if not report.failed_count and proposal.candidate_actions:
+        errors.append("green quality report cannot have candidate actions")
+    for action in proposal.candidate_actions:
+        if not action.evidence:
+            errors.append("candidate action has no quality evidence")
+        if not action.action_id.strip() or any(char.isspace() for char in action.action_id):
+            errors.append("candidate action ID is not a non-empty slug")
     return _score(
         "groundedness",
-        score,
+        1.0 if not errors else 0.0,
         threshold,
-        "All steps are grounded in report evidence and table contracts."
+        "Every candidate action is attached to report-scoped quality evidence."
         if not errors
-        else "Steps or claimed failures are not grounded in report evidence/contracts.",
+        else "Candidate actions are not grounded in this quality report.",
         errors=errors,
     )
 
 
 def _destructive_score(proposal: Proposal) -> EvalScore:
-    findings: list[str] = []
-    for step in proposal.steps:
-        preview = step.sql_preview.upper()
-        tokens = [token for token in _DESTRUCTIVE_TOKENS if token in preview]
-        if tokens:
-            findings.append(f"{step.action_id}: forbidden preview token(s) {tokens}")
-        if any(token in step.action_id.upper() for token in _DESTRUCTIVE_TOKENS):
-            findings.append(f"{step.action_id}: forbidden action identifier")
-        if step.destructive_rank == DestructiveRank.CRITICAL:
-            findings.append(f"{step.action_id}: CRITICAL destructive rank")
-    score = 0.0 if findings else 1.0
+    findings = [
+        action.action_id
+        for action in proposal.candidate_actions
+        if any(token in action.action_id.upper() for token in _DESTRUCTIVE_TOKENS)
+    ]
     return _score(
         "destructive_risk",
-        score,
+        0.0 if findings else 1.0,
         1.0,
-        "No forbidden SQL semantics or critical actions were proposed."
+        "No candidate action identifier has destructive SQL semantics."
         if not findings
-        else "Proposal contains forbidden SQL semantics or a critical action.",
-        findings=findings,
+        else "Candidate requested an action with destructive SQL semantics.",
+        action_ids=findings,
     )
 
 
 def _allowlist_score(proposal: Proposal) -> EvalScore:
-    errors: list[str] = []
-    for step in proposal.steps:
-        action = REMEDIATION_CATALOG.get(step.action_id)
-        if action is None:
-            errors.append(f"{step.action_id!r} is not allow-listed")
-            continue
-        table = step.table.split(".")[-1]
-        if table not in action.allowed_tables:
-            errors.append(f"{step.action_id} is not allow-listed for {table}")
-    score = 1.0 if not errors else 0.0
+    unknown = sorted(
+        action.action_id
+        for action in proposal.candidate_actions
+        if action.action_id not in REMEDIATION_CATALOG
+    )
     return _score(
         "allowlist_compliance",
-        score,
+        0.0 if unknown else 1.0,
         1.0,
-        "Every action/table pair is in the remediation allow-list."
-        if not errors
-        else "Proposal uses an action/table pair outside the allow-list.",
-        errors=errors,
+        "Every candidate action is catalogued; check-policy enforcement happens during compilation."
+        if not unknown
+        else "Candidate requested an action outside the remediation catalog.",
+        action_ids=unknown,
     )
 
 
 def evaluate_proposal(
     report: QualitySuiteReport, proposal: Proposal | dict[str, Any]
 ) -> EvalReport:
-    """Score a structured proposal without executing any proposal SQL."""
+    """Evaluate candidate structure and evidence; compilation remains the authority gate."""
     settings = get_settings()
     parsed, schema = _parse_proposal(proposal)
     if parsed is None:
-        zero_scores = [
-            _score("citation_quality", 0.0, settings.eval_citation_threshold, "Invalid proposal."),
-            _score("groundedness", 0.0, settings.eval_groundedness_threshold, "Invalid proposal."),
-            _score("destructive_risk", 0.0, 1.0, "Invalid proposal."),
-            _score("allowlist_compliance", 0.0, 1.0, "Invalid proposal."),
+        scores = [
+            schema,
+            _score("citation_quality", 0.0, settings.eval_citation_threshold, "Invalid candidate."),
+            _score("groundedness", 0.0, settings.eval_groundedness_threshold, "Invalid candidate."),
+            _score("destructive_risk", 0.0, 1.0, "Invalid candidate."),
+            _score("allowlist_compliance", 0.0, 1.0, "Invalid candidate."),
         ]
-        scores = [schema, *zero_scores]
     else:
         scores = [
             schema,
-            _citation_score(report, parsed, settings.eval_citation_threshold),
+            _evidence_score(report, parsed, settings.eval_citation_threshold),
             _groundedness_score(report, parsed, settings.eval_groundedness_threshold),
             _destructive_score(parsed),
             _allowlist_score(parsed),
         ]
     blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
-    passed = not blocked
-    summary = (
-        "## Proposal evaluation\n\n"
-        + (
-            "PASS — safe to present for HITL."
-            if passed
-            else "BLOCKED — do not apply this proposal."
-        )
-        + "\n\n"
-        + "\n".join(
-            f"- {'PASS' if score.passed else 'FAIL'} `{score.name}`: {score.score:.2f}"
-            for score in scores
-        )
-    )
     return EvalReport(
-        passed=passed, scores=scores, blocked_reasons=blocked, summary_markdown=summary
+        passed=not blocked,
+        scores=scores,
+        blocked_reasons=blocked,
+        summary_markdown="## Candidate Proposal evaluation\n\n"
+        + (
+            "PASS — compile this candidate."
+            if not blocked
+            else "BLOCKED — do not compile this candidate."
+        ),
     )
 
 
@@ -258,9 +207,6 @@ def evaluate_plan(plan: RemediationPlan) -> EvalReport:
     scores = [compilation, policy, targets]
     blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
     passed = not blocked
-    summary = "## Remediation plan evaluation\n\n" + (
-        "PASS — eligible for whole-plan HITL." if passed else "BLOCKED — do not admit this plan."
-    )
     fingerprint = canonical_fingerprint(
         {
             "plan_id": plan.plan_id,
@@ -277,5 +223,10 @@ def evaluate_plan(plan: RemediationPlan) -> EvalReport:
         passed=passed,
         scores=scores,
         blocked_reasons=blocked,
-        summary_markdown=summary,
+        summary_markdown="## Remediation plan evaluation\n\n"
+        + (
+            "PASS — eligible for whole-plan HITL."
+            if passed
+            else "BLOCKED — do not admit this plan."
+        ),
     )

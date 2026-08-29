@@ -14,7 +14,11 @@ def test_stub_proposal_is_allow_list_grounded(monkeypatch: pytest.MonkeyPatch) -
     agent_run = run_proposal_agent(report)
     evaluation = evaluate_proposal(report, agent_run.proposal)
     assert agent_run.llm_mode == "stub"
-    assert set(agent_run.proposal.failing_check_ids) == set(report.failing_check_ids)
+    assert {
+        evidence.check_id
+        for action in agent_run.proposal.candidate_actions
+        for evidence in action.evidence
+    } == set(report.failing_check_ids)
     assert evaluation.passed
 
 

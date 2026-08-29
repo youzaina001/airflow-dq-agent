@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class Dimension(StrEnum):
@@ -85,6 +85,7 @@ class QualitySuiteReport(BaseModel):
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     report_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
+    audit_event_id: str | None = None
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     checks: list[CheckResult]
     observed_columns: dict[str, list[str]] = Field(default_factory=dict)
@@ -218,6 +219,7 @@ class ApplyAdmission(BaseModel):
     evaluation_id: str = Field(min_length=1)
     evaluation_fingerprint: str = Field(min_length=1)
     decision_id: str = Field(min_length=1)
+    decision_event_id: str = Field(min_length=1)
     policy_fingerprint: str = Field(min_length=1)
     issued_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime
@@ -225,36 +227,15 @@ class ApplyAdmission(BaseModel):
 
 
 class Proposal(BaseModel):
-    """Structured agent output. Free text is not a contract."""
+    """Untrusted typed candidate output. Compilation grants no candidate authority."""
 
     proposal_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
     summary: str
-    failing_check_ids: list[str] = Field(default_factory=list)
     root_cause_hypothesis: str
-    citations: list[Citation] = Field(default_factory=list)
-    steps: list[RemediationStep] = Field(default_factory=list)
     candidate_actions: list[CandidateAction] = Field(default_factory=list)
     do_not_apply_reasons: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
-
-    @model_validator(mode="after")
-    def green_means_no_steps(self) -> Proposal:
-        if not self.failing_check_ids and self.steps:
-            self.do_not_apply_reasons = [
-                *self.do_not_apply_reasons,
-                "proposal_has_steps_but_no_failing_checks",
-            ]
-        return self
-
-    @property
-    def max_destructive_rank(self) -> DestructiveRank:
-        if not self.steps:
-            return DestructiveRank.NONE
-        return max(self.steps, key=lambda s: RANK_WEIGHT[s.destructive_rank]).destructive_rank
-
-    def cited_check_ids(self) -> set[str]:
-        return {c.check_id for c in self.citations}
 
 
 class EvalScore(BaseModel):
@@ -269,6 +250,9 @@ class EvalReport(BaseModel):
     evaluation_id: str = Field(default_factory=lambda: uuid4().hex)
     plan_id: str | None = None
     plan_fingerprint: str | None = None
+    policy_fingerprint: str | None = None
+    target_count: int | None = None
+    target_set_fingerprint: str | None = None
     fingerprint: str | None = None
     passed: bool
     scores: list[EvalScore]
@@ -285,6 +269,7 @@ class EvalReport(BaseModel):
 class HumanDecision(BaseModel):
     decision_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
+    audit_event_id: str | None = None
     decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     decision: Literal["Approve", "Reject", "Timeout", "shadow_skip"]
     actor: str = "airflow-hitl"
@@ -296,27 +281,6 @@ class ToolCallRecord(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     result: Any = None
     error: str | None = None
-
-
-class TraceRecord(BaseModel):
-    """Append-only. One object per event; never updated in place."""
-
-    trace_id: str = Field(default_factory=lambda: uuid4().hex)
-    parent_trace_id: str | None = None
-    kind: Literal["agent_run", "human_decision"] = "agent_run"
-    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    dag_id: str | None = None
-    run_id: str | None = None
-    llm_mode: str
-    apply_mode: str
-    llm_model: str | None = None
-    prompt: str = ""
-    retrieved_context: dict[str, Any] = Field(default_factory=dict)
-    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
-    proposal: Proposal | None = None
-    eval_scores: EvalReport | None = None
-    human_decision: HumanDecision | None = None
-    quality_run_id: str | None = None
 
 
 class AuditEvent(BaseModel):
@@ -348,6 +312,9 @@ class AuditEvent(BaseModel):
     evaluation_id: str | None = None
     evaluation_fingerprint: str | None = None
     decision_id: str | None = None
+    decision_outcome: str | None = None
+    decision_actor: str | None = None
+    decision_note: str | None = None
     apply_result_id: str | None = None
     apply_result_fingerprint: str | None = None
     reasons: list[str] = Field(default_factory=list)

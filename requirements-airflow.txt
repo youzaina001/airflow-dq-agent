@@ -1,7 +1,8 @@
 # Extra packages layered onto apache/airflow:3.1.5-python3.12
 # Pin Airflow itself in the Dockerfile so pip does not upgrade the image.
 apache-airflow-providers-common-ai[openai,mcp,sql]==0.8.0
-apache-airflow-providers-postgres>=6.0.0
+apache-airflow-providers-postgres==6.5.0
+apache-airflow-providers-standard==1.10.0
 pydantic>=2.10,<3
 pydantic-settings>=2.6,<3
 pydantic-ai-slim[openai,mcp]>=2.0,<3

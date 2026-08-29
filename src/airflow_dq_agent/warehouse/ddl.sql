@@ -130,6 +130,17 @@ ALTER TABLE dq.apply_log
     ADD COLUMN IF NOT EXISTS target_count INTEGER,
     ADD COLUMN IF NOT EXISTS target_fingerprint TEXT;
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'dq' AND table_name = 'apply_log' AND column_name = 'sql_text'
+    ) THEN
+        ALTER TABLE dq.apply_log ALTER COLUMN sql_text DROP NOT NULL;
+    END IF;
+END;
+$$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS traces_trace_id_idx ON dq.traces (trace_id);
 CREATE INDEX IF NOT EXISTS check_runs_run_check_idx ON dq.check_runs (run_id, check_id);
 CREATE INDEX IF NOT EXISTS quarantine_run_idx ON dq.quarantine_rows (run_id);
@@ -188,6 +199,7 @@ $$;
 GRANT USAGE ON SCHEMA warehouse, dq TO dq_read, dq_audit, dq_apply;
 GRANT SELECT ON ALL TABLES IN SCHEMA warehouse TO dq_read, dq_apply;
 GRANT INSERT ON dq.traces, dq.check_runs TO dq_audit;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA dq TO dq_audit;
 GRANT INSERT ON dq.quarantine_rows TO dq_apply;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA dq TO dq_apply;
 REVOKE ALL ON dq.traces, dq.check_runs, dq.apply_log FROM dq_apply;

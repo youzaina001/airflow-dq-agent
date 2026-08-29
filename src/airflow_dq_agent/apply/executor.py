@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -9,17 +10,20 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from airflow_dq_agent.apply.renderer import RenderedStep, render_plan_item, render_proposal
+from airflow_dq_agent.apply.renderer import RenderedStep, render_plan_item
+from airflow_dq_agent.config import get_settings
+from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
+    AuditEvent,
     EvalReport,
     ExecutablePlanItem,
-    HumanDecision,
-    Proposal,
     RemediationPlan,
 )
 from airflow_dq_agent.planning import current_policy_fingerprint
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
+from airflow_dq_agent.traces.lineage import apply_result_event
+from airflow_dq_agent.traces.writer import JsonlAuditSink, append_event
 from airflow_dq_agent.warehouse.db import make_engine
 
 
@@ -30,87 +34,14 @@ class AppliedStep(BaseModel):
 
 
 class ApplyResult(BaseModel):
+    apply_result_id: str = Field(default_factory=lambda: uuid4().hex)
+    fingerprint: str | None = None
+    audit_event_id: str | None = None
     run_id: str
     dry_run: bool
     plan_id: str | None = None
     admission_id: str | None = None
     steps: list[AppliedStep] = Field(default_factory=list)
-
-
-def _require_authorization(
-    proposal: Proposal,
-    passed_eval: EvalReport,
-    approval: HumanDecision | None,
-    *,
-    dry_run: bool,
-) -> None:
-    if not passed_eval.passed:
-        raise PermissionError("Refusing apply: EvalReport did not pass")
-    if not dry_run and proposal.steps and (approval is None or approval.decision != "Approve"):
-        raise PermissionError("Refusing apply: proposal-level HITL approval is required")
-
-
-def _estimate(connection: object, rendered: RenderedStep) -> int | None:
-    if rendered.estimate_sql is None:
-        return 0
-    result = connection.execute(text(rendered.estimate_sql), rendered.estimate_params)  # type: ignore[attr-defined]
-    value = result.scalar_one()
-    return int(value)
-
-
-def _log_step(
-    connection: object, run_id: str, rendered: RenderedStep, rowcount: int | None
-) -> None:
-    connection.execute(  # type: ignore[attr-defined]
-        text(
-            "INSERT INTO dq.apply_log (run_id, action_id, table_name, rowcount) "
-            "VALUES (:run_id, :action_id, :table_name, :rowcount)"
-        ),
-        {
-            "run_id": run_id,
-            "action_id": rendered.action_id,
-            "table_name": rendered.table,
-            "rowcount": rowcount,
-        },
-    )
-
-
-def apply_proposal(
-    proposal: Proposal,
-    passed_eval: EvalReport,
-    *,
-    approval: HumanDecision | None = None,
-    dry_run: bool = True,
-    engine: Engine | None = None,
-    dsn: str | None = None,
-    run_id: str | None = None,
-) -> ApplyResult:
-    """Apply controlled SQL plus audit rows in one transaction, or render a dry run.
-
-    The render path never accepts SQL from ``proposal.sql_preview``.  Real
-    mutations require both a passing deterministic eval and one proposal-level
-    HITL ``Approve`` decision.
-    """
-    _require_authorization(proposal, passed_eval, approval, dry_run=dry_run)
-    resolved_run_id = run_id or uuid4().hex
-    rendered_steps = render_proposal(proposal, run_id=resolved_run_id)
-    database = engine or make_engine(dsn)
-    applied: list[AppliedStep] = []
-    with database.begin() as connection:
-        for rendered in rendered_steps:
-            estimate = _estimate(connection, rendered)
-            if dry_run:
-                applied.append(AppliedStep(rendered=rendered, estimated_rows=estimate))
-                continue
-            rowcount: int | None = 0
-            if rendered.estimate_sql is not None:
-                result = connection.execute(text(rendered.sql), rendered.params)
-                rowcount = int(result.rowcount) if result.rowcount is not None else None
-            _log_step(connection, resolved_run_id, rendered, rowcount)
-            applied.append(
-                AppliedStep(rendered=rendered, estimated_rows=estimate, rowcount=rowcount)
-            )
-    return ApplyResult(run_id=resolved_run_id, dry_run=dry_run, steps=applied)
 
 
 def _require_plan_admission(
@@ -141,10 +72,90 @@ def _require_plan_admission(
         raise PermissionError("Refusing apply: policy snapshot drifted after admission")
 
 
+def _require_dry_run(plan: RemediationPlan, evaluation: EvalReport) -> None:
+    if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
+        raise PermissionError("Refusing dry run: remediation plan is blocked")
+    if not evaluation.passed:
+        raise PermissionError("Refusing dry run: remediation-plan evaluation did not pass")
+    if evaluation.plan_id != plan.plan_id or evaluation.plan_fingerprint != plan.fingerprint:
+        raise PermissionError(
+            "Refusing dry run: evaluation does not belong to this remediation plan"
+        )
+    if current_policy_fingerprint(plan) != plan.policy_fingerprint:
+        raise PermissionError("Refusing dry run: policy snapshot drifted after evaluation")
+
+
+def _result_fingerprint(
+    plan: RemediationPlan,
+    admission: ApplyAdmission | None,
+    run_id: str,
+    dry_run: bool,
+    steps: list[AppliedStep],
+) -> str:
+    return canonical_fingerprint(
+        {
+            "quality_run_id": plan.quality_run_id,
+            "plan_fingerprint": plan.fingerprint,
+            "admission_fingerprint": admission.fingerprint if admission else None,
+            "run_id": run_id,
+            "dry_run": dry_run,
+            "steps": [
+                {
+                    "action_id": step.rendered.action_id,
+                    "table": step.rendered.table,
+                    "estimated_rows": step.estimated_rows,
+                    "rowcount": step.rowcount,
+                }
+                for step in steps
+            ],
+        }
+    )
+
+
+def _record_apply_result(
+    connection: object,
+    *,
+    event: AuditEvent,
+    result: ApplyResult,
+    plan: RemediationPlan,
+    admission: ApplyAdmission,
+) -> None:
+    target_count = sum(
+        item.target_set.count for item in plan.items if isinstance(item, ExecutablePlanItem)
+    )
+    target_fingerprint = canonical_fingerprint(
+        [item.target_set.fingerprint for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    )
+    rowcounts = [step.rowcount for step in result.steps if step.rowcount is not None]
+    connection.execute(  # type: ignore[attr-defined]
+        text(
+            "SELECT dq.record_apply_result("
+            ":event_id, :kind, CAST(:body AS jsonb), :run_id, :plan_id, :admission_id, "
+            ":item_id, :action_id, :table_name, :target_count, :target_fingerprint, :rowcount)"
+        ),
+        {
+            "event_id": event.event_id,
+            "kind": event.kind,
+            "body": json.dumps(
+                event.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            ),
+            "run_id": result.run_id,
+            "plan_id": plan.plan_id,
+            "admission_id": admission.admission_id,
+            "item_id": "whole-plan",
+            "action_id": "whole_plan",
+            "table_name": "multiple",
+            "target_count": target_count,
+            "target_fingerprint": target_fingerprint,
+            "rowcount": sum(rowcounts) if rowcounts else None,
+        },
+    )
+
+
 def apply_plan(
     plan: RemediationPlan,
     evaluation: EvalReport,
-    admission: ApplyAdmission,
+    admission: ApplyAdmission | None = None,
     *,
     dry_run: bool = True,
     engine: Engine | None = None,
@@ -159,43 +170,87 @@ def apply_plan(
     transaction that either records a dry run or performs all mutation statements.
     """
     applied_at = now or datetime.now(UTC)
-    _require_plan_admission(plan, evaluation, admission, now=applied_at)
-    database = engine or make_engine(dsn)
+    if dry_run:
+        _require_dry_run(plan, evaluation)
+    else:
+        if admission is None:
+            raise PermissionError("Refusing apply: mutation requires an apply admission")
+        _require_plan_admission(plan, evaluation, admission, now=applied_at)
+    database = engine or make_engine(dsn or get_settings().apply_dsn)
     resolved_run_id = run_id or uuid4().hex
     executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
     resolver = PostgresTargetSetResolver(engine=database)
     applied: list[AppliedStep] = []
-    with database.begin() as connection:
-        if dry_run:
-            connection.execute(text("SET TRANSACTION READ ONLY"))
-        for item in executable:
-            actual_targets = (
-                resolver.resolve_item(connection, item)
-                if dry_run
-                else resolver.lock_and_resolve(connection, item)
-            )
-            if actual_targets != item.target_set:
-                raise PermissionError(
-                    "Refusing apply: controlled target set changed after plan compilation"
-                )
-        for item in executable:
-            rendered = render_plan_item(item, run_id=resolved_run_id)
-            estimate = item.target_set.count
-            if dry_run:
-                applied.append(AppliedStep(rendered=rendered, estimated_rows=estimate))
-                continue
-            rowcount: int | None = 0
-            if rendered.estimate_sql is not None:
-                result = connection.execute(text(rendered.sql), rendered.params)
-                rowcount = int(result.rowcount) if result.rowcount is not None else None
-            _log_step(connection, resolved_run_id, rendered, rowcount)
-            applied.append(
-                AppliedStep(rendered=rendered, estimated_rows=estimate, rowcount=rowcount)
-            )
-    return ApplyResult(
+    result = ApplyResult(
         run_id=resolved_run_id,
         dry_run=dry_run,
         plan_id=plan.plan_id,
-        admission_id=admission.admission_id,
+        admission_id=admission.admission_id if admission else None,
         steps=applied,
     )
+    try:
+        with database.begin() as connection:
+            if dry_run:
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+            for item in executable:
+                actual_targets = (
+                    resolver.resolve_item(connection, item)
+                    if dry_run
+                    else resolver.lock_and_resolve(connection, item)
+                )
+                if actual_targets != item.target_set:
+                    raise PermissionError(
+                        "Refusing apply: controlled target set changed after plan compilation"
+                    )
+            for item in executable:
+                rendered = render_plan_item(item, run_id=resolved_run_id)
+                if dry_run:
+                    applied.append(
+                        AppliedStep(rendered=rendered, estimated_rows=item.target_set.count)
+                    )
+                    continue
+                rowcount: int | None = 0
+                if rendered.estimate_sql is not None:
+                    mutation = connection.execute(text(rendered.sql), rendered.params)
+                    rowcount = int(mutation.rowcount) if mutation.rowcount is not None else None
+                applied.append(
+                    AppliedStep(
+                        rendered=rendered, estimated_rows=item.target_set.count, rowcount=rowcount
+                    )
+                )
+            result.fingerprint = _result_fingerprint(
+                plan, admission, resolved_run_id, dry_run, applied
+            )
+            event = apply_result_event(
+                plan,
+                evaluation,
+                admission,
+                result_id=result.apply_result_id,
+                result_fingerprint=result.fingerprint,
+                dry_run=dry_run,
+            )
+            result.audit_event_id = event.event_id
+            if not dry_run:
+                assert admission is not None
+                _record_apply_result(
+                    connection, event=event, result=result, plan=plan, admission=admission
+                )
+        if dry_run:
+            append_event(event)
+        else:
+            JsonlAuditSink().append(event)
+    except Exception:
+        failure = apply_result_event(
+            plan,
+            evaluation,
+            admission,
+            result_id=result.apply_result_id,
+            result_fingerprint=_result_fingerprint(
+                plan, admission, resolved_run_id, dry_run, applied
+            ),
+            dry_run=True,
+            reasons=["controlled apply failed before a result could be admitted"],
+        ).model_copy(update={"kind": "apply_failed"})
+        append_event(failure)
+        raise
+    return result

@@ -1,28 +1,43 @@
-"""Daily governed DQ flow: detect → propose → evaluate → optional HITL apply."""
+"""Daily governed DQ flow: report → candidate → plan → eval → audited HITL → apply."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from airflow.sdk import dag, task
 from airflow.exceptions import AirflowSkipException
-
 from airflow.providers.standard.operators.hitl import ApprovalOperator
+from airflow.sdk import dag, task
+from airflow.utils.trigger_rule import TriggerRule
 
 from airflow_dq_agent.agent import build_read_only_toolset, run_proposal_agent
-from airflow_dq_agent.agent.runner import AgentRun, build_prompt
-from airflow_dq_agent.apply import apply_proposal
+from airflow_dq_agent.agent.runner import build_prompt
+from airflow_dq_agent.apply import apply_plan
 from airflow_dq_agent.config import get_settings
-from airflow_dq_agent.contracts import EvalReport, HumanDecision, Proposal, QualitySuiteReport
-from airflow_dq_agent.evals import evaluate_proposal
+from airflow_dq_agent.contracts import (
+    ApplyAdmission,
+    EvalReport,
+    HumanDecision,
+    Proposal,
+    QualitySuiteReport,
+    RemediationPlan,
+)
+from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
+from airflow_dq_agent.hitl import audit_approval_decision
+from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.planning.admission import create_apply_admission
+from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite
-from airflow_dq_agent.traces import trace_agent_run
+from airflow_dq_agent.traces import append_event, candidate_proposal_event
+from airflow_dq_agent.traces.lineage import evaluation_event, plan_event
+from airflow_dq_agent.warehouse.db import make_engine
 
-# Proposal is deliberately imported at module scope so Airflow can serialize it through XCom.
+# Kept at module scope for Airflow's Pydantic XCom serialization of @task.agent output.
 __all__ = ["Proposal"]
 
 settings = get_settings()
+if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
+    raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")
 
 
 @dag(
@@ -36,15 +51,16 @@ settings = get_settings()
 def dq_daily() -> None:
     @task
     def run_suite_task() -> dict[str, Any]:
-        return run_quality_suite().model_dump(mode="json")
+        return run_quality_suite(settings.read_dsn or settings.warehouse_dsn).model_dump(
+            mode="json"
+        )
 
     @task
     def propose_stub_task(report_data: dict[str, Any]) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
         return run_proposal_agent(report).proposal.model_dump(mode="json")
 
-    # We deliberately do not give the live agent SQLToolset.query (or any arbitrary SQL tool).
-    # FunctionToolset only contains catalog reads, controlled check sampling, and schema reads.
+    # The live agent receives only catalog, fixed-sample, and observed-schema reads.
     if settings.llm_mode == "live":
 
         @task.agent(
@@ -61,72 +77,136 @@ def dq_daily() -> None:
         propose_task = propose_stub_task
 
     @task
-    def evaluate_task(report_data: dict[str, Any], proposal_data: dict[str, Any]) -> dict[str, Any]:
+    def audit_candidate_task(
+        report_data: dict[str, Any], proposal_data: dict[str, Any]
+    ) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
         proposal = Proposal.model_validate(proposal_data)
-        return evaluate_proposal(report, proposal).model_dump(mode="json")
+        if report.audit_event_id is None:
+            raise RuntimeError("quality report has no persisted audit root")
+        event = candidate_proposal_event(report, proposal, report.audit_event_id)
+        append_event(event)
+        candidate_evaluation = evaluate_proposal(report, proposal)
+        return {
+            "proposal": proposal.model_dump(mode="json"),
+            "candidate_event_id": event.event_id,
+            "candidate_evaluation": candidate_evaluation.model_dump(mode="json"),
+        }
 
     @task
-    def write_trace_task(
-        report_data: dict[str, Any], proposal_data: dict[str, Any], evaluation_data: dict[str, Any]
-    ) -> str:
+    def compile_plan_task(
+        report_data: dict[str, Any], candidate_data: dict[str, Any]
+    ) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
-        proposal = Proposal.model_validate(proposal_data)
-        evaluation = EvalReport.model_validate(evaluation_data)
-        # The Airflow @task.agent path has provider-side tool logs; this event preserves its output contract.
-        agent_run = AgentRun(
-            proposal=proposal, prompt=build_prompt(report), llm_mode=settings.llm_mode
+        proposal = Proposal.model_validate(candidate_data["proposal"])
+        candidate_evaluation = EvalReport.model_validate(candidate_data["candidate_evaluation"])
+        if not candidate_evaluation.passed:
+            raise AirflowSkipException("Candidate Proposal evaluation failed")
+        plan = compile_remediation_plan(
+            report,
+            proposal,
+            target_sets=PostgresTargetSetResolver(
+                engine=make_engine(settings.read_dsn or settings.warehouse_dsn)
+            ),
         )
-        trace = trace_agent_run(agent_run, report, evaluation, dag_id="dq_daily")
-        return trace.trace_id
+        event = plan_event(plan, str(candidate_data["candidate_event_id"]))
+        append_event(event)
+        return {"plan": plan.model_dump(mode="json"), "plan_event_id": event.event_id}
+
+    @task
+    def evaluate_plan_task(plan_data: dict[str, Any]) -> dict[str, Any]:
+        plan = RemediationPlan.model_validate(plan_data["plan"])
+        evaluation = evaluate_plan(plan)
+        event = evaluation_event(plan, evaluation, str(plan_data["plan_event_id"]))
+        append_event(event)
+        return {
+            "plan": plan.model_dump(mode="json"),
+            "plan_event_id": plan_data["plan_event_id"],
+            "evaluation": evaluation.model_dump(mode="json"),
+            "evaluation_event_id": event.event_id,
+        }
 
     report = run_suite_task()
     proposal = propose_task(report)
-    evaluation = evaluate_task(report, proposal)
-    write_trace_task(report, proposal, evaluation)
+    candidate = audit_candidate_task(report, proposal)
+    compiled = compile_plan_task(report, candidate)
+    evaluated = evaluate_plan_task(compiled)
 
     if settings.apply_mode == "hitl":
 
         @task
-        def require_approval(
-            report_data: dict[str, Any],
-            proposal_data: dict[str, Any],
-            evaluation_data: dict[str, Any],
-        ) -> None:
-            report = QualitySuiteReport.model_validate(report_data)
-            proposal_value = Proposal.model_validate(proposal_data)
-            evaluation = EvalReport.model_validate(evaluation_data)
-            if not evaluation.passed or not proposal_value.steps or not report.failed_count:
+        def require_approval(evaluation_data: dict[str, Any]) -> None:
+            plan = RemediationPlan.model_validate(evaluation_data["plan"])
+            evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
+            if plan.blocked or not evaluation.passed or not plan.items:
                 raise AirflowSkipException(
-                    "No passing proposal with remediation steps requires approval"
+                    "No passing executable remediation plan requires approval"
                 )
 
-        @task
-        def apply_after_approval(
-            proposal_data: dict[str, Any], evaluation_data: dict[str, Any], approval_value: str
+        @task(trigger_rule=TriggerRule.ALL_DONE)
+        def audit_approval_task(
+            evaluation_data: dict[str, Any], approval_output: dict[str, Any]
         ) -> dict[str, Any]:
-            if str(approval_value).lower() != "approve":
-                # This is the TaskFlow equivalent of SkipMixin behavior: rejection never reaches apply.
-                raise AirflowSkipException("HITL rejected the proposal")
-            decision = HumanDecision(decision="Approve")
-            result = apply_proposal(
-                Proposal.model_validate(proposal_data),
-                EvalReport.model_validate(evaluation_data),
-                approval=decision,
+            plan = RemediationPlan.model_validate(evaluation_data["plan"])
+            decision = audit_approval_decision(
+                approval_output,
+                approver_ids=settings.hitl_approver_id_set,
+                quality_run_id=plan.quality_run_id,
+                predecessor=str(evaluation_data["evaluation_event_id"]),
+                persist=append_event,
+            )
+            return decision.model_dump(mode="json")
+
+        @task
+        def admit_apply_task(
+            evaluation_data: dict[str, Any], decision_data: dict[str, Any]
+        ) -> dict[str, Any]:
+            plan = RemediationPlan.model_validate(evaluation_data["plan"])
+            evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
+            parsed_decision = HumanDecision.model_validate(decision_data)
+            if parsed_decision.decision != "Approve":
+                raise AirflowSkipException("HITL did not approve this remediation plan")
+            return create_apply_admission(
+                plan, evaluation, parsed_decision, ttl=settings.apply_admission_ttl
+            ).model_dump(mode="json")
+
+        @task
+        def apply_after_admission_task(
+            evaluation_data: dict[str, Any], admission_data: dict[str, Any]
+        ) -> dict[str, Any]:
+            plan = RemediationPlan.model_validate(evaluation_data["plan"])
+            evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
+            admission = ApplyAdmission.model_validate(admission_data)
+            result = apply_plan(
+                plan,
+                evaluation,
+                admission,
                 dry_run=False,
+                engine=make_engine(settings.apply_dsn or settings.warehouse_dsn),
             )
             return result.model_dump(mode="json")
 
-        approval_gate = require_approval(report, proposal, evaluation)
+        approval_gate = require_approval(evaluated)
         approval = ApprovalOperator(
-            task_id="approve_proposal",
-            subject="Approve governed DQ remediation proposal",
-            body="Evaluation passed. Approve the whole proposal or reject it.",
+            task_id="approve_remediation_plan",
+            subject="Approve governed DQ remediation plan",
+            body="Evaluation passed. Approve the whole plan or reject it. A note is required.",
             defaults="Reject",
             fail_on_reject=False,
+            assigned_users=settings.hitl_assigned_users,
+            params={
+                "approval_note": {
+                    "type": "string",
+                    "title": "Approval note",
+                    "minLength": 1,
+                }
+            },
+            response_timeout=timedelta(hours=24),
         )
         approval_gate >> approval
-        apply_after_approval(proposal, evaluation, approval.output)
+        decision = audit_approval_task(evaluated, approval.output)
+        admission = admit_apply_task(evaluated, decision)
+        apply_after_admission_task(evaluated, admission)
 
 
 dq_daily()

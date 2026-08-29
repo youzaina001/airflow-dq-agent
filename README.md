@@ -7,24 +7,27 @@ human approval boundary decide what may run.
 
 ```mermaid
 flowchart LR
-  suite[Deterministic quality suite] --> agent[Read-only proposal agent]
-  agent --> eval[Deterministic proposal evals]
-  eval -->|shadow default| trace[Append-only trace]
-  eval -->|passing proposal| hitl[Airflow HITL approval]
-  hitl -->|Approve| apply[Controlled SQL renderer + transaction]
-  hitl -->|Reject| trace
+  suite[Deterministic quality suite] --> candidate[Read-only Candidate Proposal]
+  candidate --> compiler[Deterministic plan compiler]
+  compiler --> eval[Plan evaluation]
+  eval -->|shadow default| trace[Immutable audit lineage]
+  eval -->|passing plan| hitl[Audited Airflow HITL]
+  hitl -->|whole-plan admission| apply[Lock targets + controlled transaction]
 ```
 
 The default configuration is `LLM_MODE=stub` and `APPLY_MODE=off`: it runs in
 shadow mode, makes no live model call, and mutates nothing. The agent returns a
-Pydantic `Proposal`, never an executable answer. Apply re-renders from the action ID
-and contract-backed parameters; `sql_preview` is only for a reviewer.
+Pydantic Candidate Proposal, never an executable answer. The deterministic compiler
+creates a Remediation Plan only when every failed check is covered and the requested
+action is declared by that check's policy. Apply re-renders controlled SQL from the
+plan's policy-derived inputs.
 
 | Capability | Default authority | Guardrail |
 | --- | --- | --- |
 | Read catalog, check samples, observed schema | Always | Fixed catalog/check registry; no ad-hoc SQL |
-| Propose | Always | Structured `Proposal` plus allow-list eval |
-| Apply | Never by default | Passing eval + one proposal-level HITL approval + transaction |
+| Propose | Always | Candidate actions plus report-scoped quality evidence |
+| Compile | Always | Check Policy derives all table/value/SQL inputs and target fingerprints |
+| Apply | Never by default | Passing plan eval + whole-plan admission + target lock + transaction |
 
 ## Why the evals are the product
 
@@ -63,10 +66,17 @@ credentials, transport errors, replay errors, malformed output, failed evals, an
 rejected approvals fail closed.
 
 The v1 remediation catalog is deliberately small. Quarantine actions copy affected
-rows into `dq.quarantine_rows`; they never delete source rows. `null_fill` binds a
-contract-typed value and can execute only after whole-proposal approval. Every agent
-run is appended to `traces/agent-traces.jsonl`; optional Postgres mirroring happens
-after that local append, so local evidence survives a mirror outage.
+rows into `dq.quarantine_rows`; they never delete source rows. `null_fill` remains
+catalogued but unavailable until a reviewed Check Policy supplies a target rule and
+fill value. Every executable plan item has an exact primary-key target-set count and
+fingerprint. Apply recomputes and locks that same set in its mutation transaction;
+target drift, policy drift, or an expired (24-hour default) admission fails closed.
+
+Audit lineage uses `quality_run_id` as its root and separate immutable IDs for the
+report, candidate, plan, evaluation, decision, and apply result. Postgres is required
+for HITL audit writes; JSONL is supplementary. Durable payloads contain only IDs,
+fingerprints, counts, and sanitized reasons—not prompts or row samples. Production
+uses the least-privilege `dq_read`, `dq_audit`, and `dq_apply` roles/DSNs.
 
 ## Layout
 
@@ -78,6 +88,8 @@ src/airflow_dq_agent/
   agent/      # stub, replay, and opt-in read-only live proposal paths
   evals/      # deterministic proposal scorers and gates
   apply/      # controlled renderer and transactional executor
+  planning/   # plan compiler, target-set resolver, and apply admission
+  hitl.py     # structured ApprovalOperator response adapter
   traces/     # append-only JSONL and optional Postgres mirror
   warehouse/  # synthetic DDL, seed data, and known defects
 dags/dq_daily.py  # Airflow TaskFlow orchestration and HITL boundary
@@ -87,3 +99,20 @@ evals/cases/      # portable deterministic evaluation cases
 This is not a chatbot, LangChain demo, dbt Cloud integration, Kubernetes deployment,
 or a general warehouse console. It is a small portfolio operator that makes the
 autonomy boundary explicit and testable.
+
+## Runtime verification
+
+`make compose-smoke` is the deterministic PR path. It builds the pinned Airflow
+3.1.5/Python 3.12 image against official constraints, starts Compose in stub/shadow
+mode, seeds the warehouse, parses and runs `dq_daily`, then verifies persisted
+lineage and zero quarantine rows.
+
+Before a release or demo, manually verify a live approval and rejection in Compose
+with `APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed
+`HITL_APPROVER_IDS` user. An approval requires a non-empty note; rejection and timeout
+must create distinct audit outcomes. Confirm an approval creates a fresh whole-plan
+admission and cannot authorize a different plan.
+
+For the opt-in live-model smoke, use sanitized seeded data with `LLM_MODE=live` and
+`APPLY_MODE=off`. It may propose, compile, evaluate, and audit, but cannot create an
+admission or mutate data.

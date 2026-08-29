@@ -75,3 +75,10 @@ jobs:
           LLM_MODE: stub
           APPLY_MODE: off
         run: pytest tests/integration -q --tb=short
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic Compose DAG smoke
+        run: make compose-smoke

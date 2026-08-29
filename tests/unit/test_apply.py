@@ -1,18 +1,7 @@
 import pytest
 
-from airflow_dq_agent.apply import apply_proposal, render_step
-from airflow_dq_agent.contracts.models import EvalReport, Proposal, RemediationStep
-
-
-def _proposal(step: RemediationStep) -> Proposal:
-    return Proposal(
-        summary="test",
-        failing_check_ids=["fact_orders.total_amount.completeness"],
-        root_cause_hypothesis="test",
-        citations=[],
-        steps=[step],
-        confidence=0.5,
-    )
+from airflow_dq_agent.apply import render_step
+from airflow_dq_agent.contracts.models import RemediationStep
 
 
 def test_renderer_uses_compound_key_and_ignores_claimed_row_count() -> None:
@@ -61,17 +50,3 @@ def test_null_fill_requires_contract_compatible_value() -> None:
     )
     with pytest.raises(ValueError, match="float64"):
         render_step(step)
-
-
-def test_apply_refuses_failed_evaluation_before_connecting() -> None:
-    proposal = _proposal(
-        RemediationStep(
-            action_id="no_op_alert",
-            table="fact_orders",
-            params={"check_id": "fact_orders.total_amount.completeness"},
-            rationale="test",
-            sql_preview="safe preview",
-        )
-    )
-    with pytest.raises(PermissionError, match="EvalReport"):
-        apply_proposal(proposal, EvalReport(passed=False, scores=[]))

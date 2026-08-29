@@ -320,5 +320,5 @@ def run_quality_suite(dsn: str | None = None) -> QualitySuiteReport:
     # quality process for durable audit.
     from airflow_dq_agent.traces import record_quality_report
 
-    record_quality_report(report, dsn=dsn)
-    return report
+    event = record_quality_report(report, dsn=dsn)
+    return report.model_copy(update={"audit_event_id": event.event_id})

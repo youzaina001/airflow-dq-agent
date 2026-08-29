@@ -18,7 +18,6 @@ from airflow_dq_agent.contracts.models import (
     RemediationStep,
     TargetSet,
     ToolCallRecord,
-    TraceRecord,
 )
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS, TableContract, get_table_contract
 
@@ -44,6 +43,5 @@ __all__ = [
     "TableContract",
     "TargetSet",
     "ToolCallRecord",
-    "TraceRecord",
     "get_table_contract",
 ]

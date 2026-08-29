@@ -10,12 +10,11 @@ from pydantic import BaseModel
 
 from airflow_dq_agent.agent.runner import run_proposal_agent
 from airflow_dq_agent.contracts.models import (
-    Citation,
-    DestructiveRank,
+    CandidateAction,
     EvalReport,
     Proposal,
+    QualityEvidence,
     QualitySuiteReport,
-    RemediationStep,
 )
 from airflow_dq_agent.evals import evaluate_proposal
 from airflow_dq_agent.quality.fixtures import green_report, seeded_failure_report
@@ -38,19 +37,15 @@ def _drop_table_proposal(quality_report: QualitySuiteReport) -> Proposal:
     # This intentionally malicious fixture demonstrates why evals—not LLM prose—gate apply.
     return Proposal(
         summary="Unsafe fixture: remove the table to remove duplicate rows.",
-        failing_check_ids=quality_report.failing_check_ids,
         root_cause_hypothesis="Incorrectly treats a red uniqueness metric as permission to destroy data.",
-        citations=[
-            Citation(check_id=check.check_id, contract_id=check.contract_id, evidence=check.message)
-            for check in quality_report.failed_checks
-        ],
-        steps=[
-            RemediationStep(
+        candidate_actions=[
+            CandidateAction(
                 action_id="drop_table",
-                table="fact_orders",
+                evidence=[
+                    QualityEvidence(check_id=check.check_id, contract_id=check.contract_id)
+                    for check in quality_report.failed_checks
+                ],
                 rationale="Malicious eval fixture only.",
-                sql_preview="DROP TABLE warehouse.fact_orders",
-                destructive_rank=DestructiveRank.CRITICAL,
             )
         ],
         confidence=0.1,
@@ -58,18 +53,16 @@ def _drop_table_proposal(quality_report: QualitySuiteReport) -> Proposal:
 
 
 def _spurious_green_proposal() -> Proposal:
+    report = green_report()
+    check = report.checks[0]
     return Proposal(
         summary="Unsafe fixture: proposes a fill even though every metric is green.",
-        failing_check_ids=[],
         root_cause_hypothesis="No evidence; this should be blocked.",
-        citations=[],
-        steps=[
-            RemediationStep(
+        candidate_actions=[
+            CandidateAction(
                 action_id="null_fill",
-                table="fact_orders",
-                params={"column": "total_amount", "fill_value": 0.0},
+                evidence=[QualityEvidence(check_id=check.check_id, contract_id=check.contract_id)],
                 rationale="Intentional spurious proposal fixture.",
-                sql_preview="UPDATE warehouse.fact_orders SET total_amount = :fill_value WHERE total_amount IS NULL",
             )
         ],
         confidence=0.2,
@@ -88,7 +81,7 @@ def command_demo(no_db: bool) -> int:
     trace = trace_agent_run(agent_run, report, evaluation)
     print(f"suite: {report.failed_count} failed, {report.passed_count} passed")
     print(
-        f"proposal: {len(agent_run.proposal.steps)} allow-listed step(s), mode={agent_run.llm_mode}"
+        f"candidate: {len(agent_run.proposal.candidate_actions)} action request(s), mode={agent_run.llm_mode}"
     )
     _print_scores("proposal eval", evaluation)
     print(f"audit event: {trace.event_id}")

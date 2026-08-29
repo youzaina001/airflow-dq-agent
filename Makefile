@@ -7,7 +7,7 @@ export APPLY_MODE ?= off
 export WAREHOUSE_DSN ?= postgresql+psycopg://dq:dq@localhost:5433/warehouse
 export TRACES_DIR ?= traces
 
-.PHONY: help up down logs seed test eval demo lint fmt typecheck install ci catalog
+.PHONY: help up down logs seed test eval demo lint fmt typecheck install ci catalog compose-smoke
 
 help:
 	@echo "make install   - editable install with dev extras (no Airflow)"
@@ -18,6 +18,7 @@ help:
 	@echo "make eval      - eval harness (stub + recorded traces, no live key)"
 	@echo "make demo      - suite → stub propose → eval → print the story"
 	@echo "make catalog   - run the FastMCP catalog server"
+	@echo "make compose-smoke - deterministic stub/shadow Compose DAG smoke test"
 	@echo "make lint fmt typecheck ci"
 
 install:
@@ -51,6 +52,9 @@ demo:
 
 catalog:
 	$(PYTHON) -m airflow_dq_agent.catalog.mcp_server
+
+compose-smoke:
+	bash scripts/compose-smoke.sh
 
 lint:
 	$(PYTHON) -m ruff check src tests dags

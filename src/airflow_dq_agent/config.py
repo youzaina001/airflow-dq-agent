@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,8 @@ class Settings(BaseSettings):
     apply_dsn: str | None = None
     llm_mode: LlmMode = "stub"
     apply_mode: ApplyMode = "off"
+    apply_admission_ttl_hours: int = Field(default=24, gt=0)
+    hitl_approver_ids: str = "airflow"
     llm_model: str = "openai:gpt-4.1-mini"
     openai_api_key: str | None = None
     openai_base_url: str | None = None
@@ -41,6 +44,18 @@ class Settings(BaseSettings):
     @property
     def live_configured(self) -> bool:
         return bool(self.openai_api_key) or bool(self.openai_base_url)
+
+    @property
+    def hitl_approver_id_set(self) -> set[str]:
+        return {value.strip() for value in self.hitl_approver_ids.split(",") if value.strip()}
+
+    @property
+    def hitl_assigned_users(self) -> list[dict[str, str]]:
+        return [{"id": user_id, "name": user_id} for user_id in sorted(self.hitl_approver_id_set)]
+
+    @property
+    def apply_admission_ttl(self) -> timedelta:
+        return timedelta(hours=self.apply_admission_ttl_hours)
 
 
 def get_settings() -> Settings:

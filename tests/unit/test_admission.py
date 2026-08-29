@@ -59,4 +59,13 @@ def test_approved_evaluated_plan_receives_time_bounded_apply_admission() -> None
     assert admission.fingerprint
 
     with pytest.raises(PermissionError, match="expired"):
-        apply_plan(plan, evaluation, admission, now=admission.expires_at + timedelta(seconds=1))
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            dry_run=False,
+            now=admission.expires_at + timedelta(seconds=1),
+        )
+
+    with pytest.raises(PermissionError, match="requires an apply admission"):
+        apply_plan(plan, evaluation, dry_run=False)

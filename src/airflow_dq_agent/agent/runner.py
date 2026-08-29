@@ -19,23 +19,21 @@ from sqlalchemy import inspect, text
 from airflow_dq_agent.catalog import service as catalog
 from airflow_dq_agent.config import Settings, get_settings
 from airflow_dq_agent.contracts.models import (
+    CandidateAction,
     CheckResult,
-    Citation,
-    Dimension,
     Proposal,
+    QualityEvidence,
     QualitySuiteReport,
-    RemediationStep,
     ToolCallRecord,
 )
-from airflow_dq_agent.contracts.remediations import get_action, validate_step_params
 from airflow_dq_agent.contracts.tables import get_table_contract
 from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.warehouse.db import make_engine
 
 SYSTEM_PROMPT = """You are a governed data-quality proposal agent.
-Return only the Proposal contract. Cite every failing check, use only catalog
-allow-listed actions, and never propose a mutation if all checks are green.
-sql_preview is informational for a human and is never executed. You have
+Return only the Candidate Proposal contract. Each requested action must cite one
+or more failed checks with their contract IDs. You may choose only an action ID;
+the deterministic compiler derives tables, values, target rows, and SQL. You have
 read-only catalog, controlled check sampling, and observed-schema tools only.
 """
 
@@ -49,101 +47,19 @@ class AgentRun(BaseModel):
     llm_mode: str
 
 
-def _table_key(table: str) -> str:
-    return table.split(".")[-1]
-
-
-def _primary_key(table: str) -> str:
-    contract = get_table_contract(table)
-    if len(contract.primary_key) != 1:
-        raise ValueError(f"{contract.table} must have one primary key for v1 remediation")
-    return contract.primary_key[0]
-
-
-def _business_key(check: CheckResult) -> str | list[str]:
-    """Return the contracted business key for known uniqueness checks."""
-    if check.check_id == "fact_orders.order_nk.uniqueness":
-        return ["customer_sk", "order_ts"]
-    if check.check_id == "dim_patient.subject_id.uniqueness":
-        return "subject_id"
-    if check.check_id == "dim_customer.customer_nk.uniqueness":
-        return "customer_nk"
-    if check.column:
-        return check.column
-    raise ValueError(f"No declared business key for {check.check_id}")
-
-
-def _step_for_failure(check: CheckResult) -> RemediationStep:
-    """Map a real failed check to a bindable, allow-listed policy action."""
-    table = _table_key(check.table)
-    params: dict[str, Any]
-    action_id: str
-    rationale: str
-
-    if check.dimension == Dimension.COMPLETENESS and check.column:
-        action_id = "quarantine_nulls"
-        params = {"column": check.column, "pk_column": _primary_key(table)}
-        rationale = f"Copy rows with NULL {check.column} for human review; leave source unchanged."
-    elif check.dimension == Dimension.VALIDITY and check.check_id in CHECK_SPECS and check.column:
-        action_id = "quarantine_invalids"
-        params = {
-            "check_id": check.check_id,
-            "column": check.column,
-            "pk_column": _primary_key(table),
-        }
-        rationale = "Copy rows matching the check registry's controlled validity predicate."
-    elif check.dimension == Dimension.UNIQUENESS:
-        try:
-            business_key = _business_key(check)
-        except ValueError:
-            action_id = "no_op_alert"
-            params = {"check_id": check.check_id}
-            rationale = "Alert only: no contracted business key exists for a safe duplicate policy."
-        else:
-            action_id = "dedupe_keep_min_pk"
-            params = {"business_key": business_key, "pk_column": _primary_key(table)}
-            rationale = "Copy non-canonical duplicate rows, retaining the minimum surrogate key."
-    elif check.dimension == Dimension.REFERENTIAL_INTEGRITY and check.column:
-        contract = get_table_contract(table)
-        foreign_key = next((fk for fk in contract.foreign_keys if fk[0] == check.column), None)
-        if foreign_key is None:
-            action_id = "no_op_alert"
-            params = {"check_id": check.check_id}
-            rationale = "Alert only: the failed foreign key is not in the table contract."
-        else:
-            _, ref_table, ref_column = foreign_key
-            action_id = "quarantine_orphans"
-            params = {
-                "fk_column": check.column,
-                "ref_table": ref_table,
-                "ref_column": ref_column,
-                "pk_column": _primary_key(table),
-            }
-            rationale = "Copy unresolved foreign-key rows for review; do not delete source rows."
-    elif check.dimension == Dimension.SCHEMA_DRIFT:
-        action_id = "schema_drift_ticket"
-        params = {"check_id": check.check_id}
-        rationale = "Open a contract-change ticket; schema changes are never applied automatically."
-    else:
+def _candidate_action_for_failure(check: CheckResult) -> CandidateAction:
+    """Ask only for the first declared policy action; compilation owns all parameters."""
+    spec = CHECK_SPECS.get(check.check_id)
+    if spec is None or not spec.policies:
         action_id = "no_op_alert"
-        params = {"check_id": check.check_id}
-        rationale = "Alert only: this failure does not have a deterministic safe remediation."
-
-    violations = validate_step_params(action_id, table, params)
-    if violations:
-        raise ValueError(
-            f"Internal remediation policy is invalid for {check.check_id}: {violations}"
-        )
-    action = get_action(action_id)
-    return RemediationStep(
+        rationale = "The check has no reviewed executable policy; record an alert only."
+    else:
+        action_id = spec.policies[0].action_id
+        rationale = "Request the reviewed action declared by this failed check's policy."
+    return CandidateAction(
         action_id=action_id,
-        table=table,
-        params=params,
-        estimated_rows=check.n_failed,
-        reversible=action.reversible,
-        destructive_rank=action.destructive_rank,
+        evidence=[QualityEvidence(check_id=check.check_id, contract_id=check.contract_id)],
         rationale=rationale,
-        sql_preview=action.preview_sql.format(table=table, **params),
     )
 
 
@@ -168,26 +84,15 @@ def _stub_proposal(report: QualitySuiteReport) -> Proposal:
     if not failures:
         return Proposal(
             summary="All declared quality checks passed; no remediation is proposed.",
-            failing_check_ids=[],
             root_cause_hypothesis="No failed check evidence was provided.",
-            citations=[],
-            steps=[],
+            candidate_actions=[],
             do_not_apply_reasons=["all checks passed"],
             confidence=1.0,
         )
     return Proposal(
         summary=f"{len(failures)} failed checks have deterministic, allow-listed proposals.",
-        failing_check_ids=[check.check_id for check in failures],
         root_cause_hypothesis="Seeded or observed rows violate declared table contracts.",
-        citations=[
-            Citation(
-                check_id=check.check_id,
-                contract_id=check.contract_id,
-                evidence=f"{check.n_failed}/{check.n_total}: {check.message}",
-            )
-            for check in failures
-        ],
-        steps=[_step_for_failure(check) for check in failures],
+        candidate_actions=[_candidate_action_for_failure(check) for check in failures],
         do_not_apply_reasons=["requires evaluation and, for mutations, proposal-level HITL"],
         confidence=0.9,
     )

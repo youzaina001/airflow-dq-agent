@@ -8,9 +8,12 @@ import pytest
 from sqlalchemy import text
 
 from airflow_dq_agent.agent import run_proposal_agent
-from airflow_dq_agent.apply import apply_proposal
+from airflow_dq_agent.apply import apply_plan
 from airflow_dq_agent.contracts.models import HumanDecision
-from airflow_dq_agent.evals import evaluate_proposal
+from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
+from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.planning.admission import create_apply_admission
+from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite
 from airflow_dq_agent.warehouse.db import make_engine
 from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
@@ -44,18 +47,29 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
         assert failures[check_id] == defect.n_rows
 
     proposal = run_proposal_agent(report).proposal
-    evaluation = evaluate_proposal(report, proposal)
-    assert evaluation.passed
+    assert evaluate_proposal(report, proposal).passed
     engine = make_engine(warehouse_dsn)
-    dry_run = apply_proposal(
-        proposal, evaluation, dry_run=True, engine=engine, run_id="integration-dry"
+    plan = compile_remediation_plan(
+        report, proposal, target_sets=PostgresTargetSetResolver(engine=engine)
+    )
+    evaluation = evaluate_plan(plan)
+    assert evaluation.passed
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        HumanDecision(
+            decision="Approve", actor="integration-test", note="Reviewed deterministic target sets."
+        ),
+    )
+    dry_run = apply_plan(
+        plan, evaluation, admission, dry_run=True, engine=engine, run_id="integration-dry"
     )
     assert any(step.estimated_rows == 5 for step in dry_run.steps)
 
-    applied = apply_proposal(
-        proposal,
+    applied = apply_plan(
+        plan,
         evaluation,
-        approval=HumanDecision(decision="Approve", actor="integration-test"),
+        admission,
         dry_run=False,
         engine=engine,
         run_id="integration-apply",

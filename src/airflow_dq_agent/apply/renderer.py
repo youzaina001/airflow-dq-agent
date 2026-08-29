@@ -12,7 +12,6 @@ from airflow_dq_agent.contracts.models import (
     DestructiveRank,
     ExecutablePlanItem,
     NonExecutablePlanItem,
-    Proposal,
     RemediationStep,
 )
 from airflow_dq_agent.contracts.remediations import get_action, validate_step_params
@@ -239,11 +238,6 @@ def render_step(step: RemediationStep, *, run_id: str = "dry-run") -> RenderedSt
             target_sql=target_sql,
         )
     raise ValueError(f"No renderer exists for action {step.action_id!r}")
-
-
-def render_proposal(proposal: Proposal, *, run_id: str = "dry-run") -> list[RenderedStep]:
-    """Render all steps without consulting proposal row estimates or proposal SQL."""
-    return [render_step(step, run_id=run_id) for step in proposal.steps]
 
 
 def render_plan_item(

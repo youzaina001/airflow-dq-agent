@@ -21,11 +21,17 @@ x-airflow-common: &airflow-common
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
     PYTHONPATH: /opt/airflow/src
     WAREHOUSE_DSN: postgresql+psycopg://dq:dq@warehouse:5432/warehouse
+    READ_DSN: ${READ_DSN:-postgresql+psycopg://dq:dq@warehouse:5432/warehouse}
+    AUDIT_DSN: ${AUDIT_DSN:-postgresql+psycopg://dq:dq@warehouse:5432/warehouse}
+    APPLY_DSN: ${APPLY_DSN:-postgresql+psycopg://dq:dq@warehouse:5432/warehouse}
     LLM_MODE: ${LLM_MODE:-stub}
     APPLY_MODE: ${APPLY_MODE:-off}
     LLM_MODEL: ${LLM_MODEL:-openai:gpt-4.1-mini}
     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    REPLAY_TRACE_PATH: ${REPLAY_TRACE_PATH:-evals/fixtures/traces/replay-proposal.json}
+    TRACE_POSTGRES: ${TRACE_POSTGRES:-false}
+    HITL_APPROVER_IDS: ${HITL_APPROVER_IDS:-airflow}
     TRACES_DIR: /opt/airflow/traces
     AIRFLOW_CONN_WAREHOUSE_POSTGRES: 'postgresql://dq:dq@warehouse:5432/warehouse'
     AIRFLOW_CONN_PYDANTICAI_DEFAULT: >
