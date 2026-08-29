@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -146,14 +146,75 @@ class RemediationStep(BaseModel):
         return cleaned
 
 
+class QualityEvidence(BaseModel):
+    """A failed-check reference scoped by the remediation plan's quality run."""
+
+    check_id: str = Field(min_length=1)
+    contract_id: str = Field(min_length=1)
+
+
+class CandidateAction(BaseModel):
+    """An untrusted request for one action; it has no SQL parameters or authority."""
+
+    action_id: str = Field(min_length=1)
+    evidence: list[QualityEvidence] = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+
+
+class TargetSet(BaseModel):
+    """Durable summary of a controlled target set; never carries its raw keys."""
+
+    count: int = Field(ge=0)
+    fingerprint: str = Field(min_length=1)
+
+
+class ExecutablePlanItem(BaseModel):
+    kind: Literal["executable"] = "executable"
+    item_id: str = Field(min_length=1)
+    action_id: str = Field(min_length=1)
+    table: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[QualityEvidence] = Field(min_length=1)
+    target_set: TargetSet
+    policy_fingerprint: str = Field(min_length=1)
+
+
+class NonExecutablePlanItem(BaseModel):
+    kind: Literal["non_executable"] = "non_executable"
+    item_id: str = Field(min_length=1)
+    evidence: list[QualityEvidence] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+PlanItem = Annotated[
+    ExecutablePlanItem | NonExecutablePlanItem,
+    Field(discriminator="kind"),
+]
+
+
+class RemediationPlan(BaseModel):
+    """A deterministic, complete collection of executable or blocked plan items."""
+
+    plan_id: str = Field(default_factory=lambda: uuid4().hex)
+    quality_run_id: str = Field(min_length=1)
+    candidate_fingerprint: str = Field(min_length=1)
+    policy_fingerprint: str = Field(min_length=1)
+    items: list[PlanItem]
+    blocked: bool
+    blocked_reasons: list[str] = Field(default_factory=list)
+    fingerprint: str = Field(min_length=1)
+    compiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class Proposal(BaseModel):
     """Structured agent output. Free text is not a contract."""
 
     summary: str
-    failing_check_ids: list[str]
+    failing_check_ids: list[str] = Field(default_factory=list)
     root_cause_hypothesis: str
-    citations: list[Citation]
+    citations: list[Citation] = Field(default_factory=list)
     steps: list[RemediationStep] = Field(default_factory=list)
+    candidate_actions: list[CandidateAction] = Field(default_factory=list)
     do_not_apply_reasons: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 

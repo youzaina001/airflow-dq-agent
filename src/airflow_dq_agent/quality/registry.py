@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from airflow_dq_agent.contracts.models import Dimension
 from airflow_dq_agent.contracts.tables import get_table_contract
+
+
+class CheckPolicy(BaseModel):
+    """One controlled remediation rule declared by a quality check."""
+
+    action_id: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class CheckSpec(BaseModel):
@@ -17,10 +26,45 @@ class CheckSpec(BaseModel):
     sample_sql: str
     quarantine_predicate: str | None = None
     contract_id: str = ""
+    policies: list[CheckPolicy] = Field(default_factory=list)
 
     def model_post_init(self, __context: object) -> None:
         if not self.contract_id:
             self.contract_id = get_table_contract(self.table).contract_id
+
+    def rule_for(self, action_id: str) -> CheckPolicy | None:
+        return next((policy for policy in self.policies if policy.action_id == action_id), None)
+
+
+_UNIQUE_BUSINESS_KEYS: dict[str, list[str]] = {
+    "fact_orders.order_nk.uniqueness": ["customer_sk", "order_ts"],
+    "dim_patient.subject_id.uniqueness": ["subject_id"],
+    "dim_product.sku.uniqueness": ["sku"],
+}
+
+
+def _policies(check_id: str, dimension: Dimension) -> list[CheckPolicy]:
+    """The only actions the compiler may select for a check.
+
+    ``null_fill`` remains catalogued but intentionally absent until a reviewed check
+    policy declares both its target rule and fill value.
+    """
+    if dimension is Dimension.COMPLETENESS:
+        return [CheckPolicy(action_id="quarantine_nulls")]
+    if dimension is Dimension.VALIDITY:
+        return [CheckPolicy(action_id="quarantine_invalids")]
+    if dimension is Dimension.UNIQUENESS:
+        return [
+            CheckPolicy(
+                action_id="dedupe_keep_min_pk",
+                parameters={"business_key": _UNIQUE_BUSINESS_KEYS[check_id]},
+            )
+        ]
+    if dimension is Dimension.REFERENTIAL_INTEGRITY:
+        return [CheckPolicy(action_id="quarantine_orphans")]
+    if dimension is Dimension.SCHEMA_DRIFT:
+        return [CheckPolicy(action_id="schema_drift_ticket")]
+    return [CheckPolicy(action_id="no_op_alert")]
 
 
 def _spec(
@@ -40,6 +84,7 @@ def _spec(
         description=description,
         sample_sql=sample_sql,
         quarantine_predicate=quarantine_predicate,
+        policies=_policies(check_id, dimension),
     )
 
 
