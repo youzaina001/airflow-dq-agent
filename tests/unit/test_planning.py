@@ -56,6 +56,38 @@ def test_compiler_creates_an_executable_item_from_declared_check_policy() -> Non
     assert "target_keys" not in plan.model_dump_json()
 
 
+def test_compiler_blocks_catalogued_but_unreviewed_null_fill_without_target_lookup() -> None:
+    report = seeded_failure_report()
+    failed = report.get("fact_orders.total_amount.completeness")
+    assert failed is not None
+    one_failure_report = report.model_copy(update={"checks": [failed]})
+
+    class NoTargetLookup:
+        def resolve(self, **_: object) -> TargetSet:
+            raise AssertionError("unreviewed actions must not resolve a target set")
+
+    candidate = Proposal(
+        summary="Fill the missing values.",
+        root_cause_hypothesis="An unsafe automated fill was requested.",
+        candidate_actions=[
+            CandidateAction(
+                action_id="null_fill",
+                evidence=[
+                    QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                ],
+                rationale="This catalogued action has no reviewed policy.",
+            )
+        ],
+        confidence=0.1,
+    )
+
+    plan = compile_remediation_plan(one_failure_report, candidate, target_sets=NoTargetLookup())
+
+    assert plan.blocked is True
+    assert plan.items[0].kind == "non_executable"
+    assert plan.blocked_reasons == ["candidate action is unavailable under the controlled policy"]
+
+
 def test_plan_renderer_accepts_only_executable_compiled_items() -> None:
     item = ExecutablePlanItem(
         item_id="candidate-0",
