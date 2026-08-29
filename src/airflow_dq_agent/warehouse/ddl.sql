@@ -141,7 +141,7 @@ BEGIN
 END;
 $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS traces_trace_id_idx ON dq.traces (trace_id);
+CREATE UNIQUE INDEX IF NOT EXISTS traces_trace_id_unique_idx ON dq.traces (trace_id);
 CREATE INDEX IF NOT EXISTS check_runs_run_check_idx ON dq.check_runs (run_id, check_id);
 CREATE INDEX IF NOT EXISTS quarantine_run_idx ON dq.quarantine_rows (run_id);
 CREATE INDEX IF NOT EXISTS apply_log_plan_idx ON dq.apply_log (plan_id, run_id);

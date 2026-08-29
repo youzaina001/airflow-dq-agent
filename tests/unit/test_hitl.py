@@ -54,3 +54,4 @@ def test_audited_approval_persists_the_actor_and_note_before_returning() -> None
     assert decision.audit_event_id == events[0].event_id
     assert events[0].decision_actor == "approver-1"
     assert events[0].decision_note == "Reviewed exact target counts."
+    assert events[0].decision_fingerprint

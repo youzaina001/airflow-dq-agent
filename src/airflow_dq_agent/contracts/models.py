@@ -313,6 +313,7 @@ class AuditEvent(BaseModel):
     evaluation_id: str | None = None
     evaluation_fingerprint: str | None = None
     decision_id: str | None = None
+    decision_fingerprint: str | None = None
     decision_outcome: str | None = None
     decision_actor: str | None = None
     decision_note: str | None = None

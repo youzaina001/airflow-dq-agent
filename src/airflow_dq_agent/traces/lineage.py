@@ -154,6 +154,7 @@ def decision_event(
         quality_run_id=quality_run_id,
         predecessor_ids=[_predecessor_id(predecessor)],
         decision_id=decision.decision_id,
+        decision_fingerprint=decision_fingerprint,
         decision_outcome=decision.decision,
         decision_actor=decision.actor,
         decision_note=decision.note,
