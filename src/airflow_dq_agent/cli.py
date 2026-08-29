@@ -91,7 +91,7 @@ def command_demo(no_db: bool) -> int:
         f"proposal: {len(agent_run.proposal.steps)} allow-listed step(s), mode={agent_run.llm_mode}"
     )
     _print_scores("proposal eval", evaluation)
-    print(f"trace: {trace.trace_id}")
+    print(f"audit event: {trace.event_id}")
     print("apply skipped (APPLY_MODE=off)")
     drop_eval = evaluate_proposal(report, _drop_table_proposal(report))
     green_eval = evaluate_proposal(green_report(), _spurious_green_proposal())

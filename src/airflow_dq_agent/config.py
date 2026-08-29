@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     )
 
     warehouse_dsn: str = "postgresql+psycopg://dq:dq@localhost:5433/warehouse"
+    read_dsn: str | None = None
+    audit_dsn: str | None = None
+    apply_dsn: str | None = None
     llm_mode: LlmMode = "stub"
     apply_mode: ApplyMode = "off"
     llm_model: str = "openai:gpt-4.1-mini"

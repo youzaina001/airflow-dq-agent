@@ -83,6 +83,8 @@ class CheckResult(BaseModel):
 
 class QualitySuiteReport(BaseModel):
     run_id: str = Field(default_factory=lambda: uuid4().hex)
+    report_id: str = Field(default_factory=lambda: uuid4().hex)
+    fingerprint: str | None = None
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     checks: list[CheckResult]
     observed_columns: dict[str, list[str]] = Field(default_factory=dict)
@@ -225,6 +227,8 @@ class ApplyAdmission(BaseModel):
 class Proposal(BaseModel):
     """Structured agent output. Free text is not a contract."""
 
+    proposal_id: str = Field(default_factory=lambda: uuid4().hex)
+    fingerprint: str | None = None
     summary: str
     failing_check_ids: list[str] = Field(default_factory=list)
     root_cause_hypothesis: str
@@ -280,6 +284,7 @@ class EvalReport(BaseModel):
 
 class HumanDecision(BaseModel):
     decision_id: str = Field(default_factory=lambda: uuid4().hex)
+    fingerprint: str | None = None
     decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     decision: Literal["Approve", "Reject", "Timeout", "shadow_skip"]
     actor: str = "airflow-hitl"
@@ -312,3 +317,38 @@ class TraceRecord(BaseModel):
     eval_scores: EvalReport | None = None
     human_decision: HumanDecision | None = None
     quality_run_id: str | None = None
+
+
+class AuditEvent(BaseModel):
+    """A minimized immutable lineage event safe to persist in JSONL or Postgres."""
+
+    event_id: str = Field(default_factory=lambda: uuid4().hex)
+    kind: Literal[
+        "quality_report",
+        "candidate_proposal",
+        "plan_compiled",
+        "plan_blocked",
+        "evaluation",
+        "human_approved",
+        "human_rejected",
+        "human_timed_out",
+        "dry_run",
+        "apply_succeeded",
+        "apply_failed",
+    ]
+    occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    quality_run_id: str = Field(min_length=1)
+    predecessor_ids: list[str] = Field(default_factory=list)
+    report_id: str | None = None
+    report_fingerprint: str | None = None
+    proposal_id: str | None = None
+    candidate_fingerprint: str | None = None
+    plan_id: str | None = None
+    plan_fingerprint: str | None = None
+    evaluation_id: str | None = None
+    evaluation_fingerprint: str | None = None
+    decision_id: str | None = None
+    apply_result_id: str | None = None
+    apply_result_fingerprint: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    fingerprint: str = Field(min_length=1)

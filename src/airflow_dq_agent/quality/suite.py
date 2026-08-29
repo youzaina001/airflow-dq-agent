@@ -314,4 +314,11 @@ def run_suite_on_frames(frames: Mapping[str, pl.DataFrame]) -> QualitySuiteRepor
 def run_quality_suite(dsn: str | None = None) -> QualitySuiteReport:
     engine = make_engine(dsn)
     frames = load_frames(engine)
-    return run_suite_on_frames(frames)
+    report = run_suite_on_frames(frames)
+    # In HITL mode this is a required Postgres audit write; shadow mode retains the
+    # supplementary JSONL event only.  Either way per-check samples never leave the
+    # quality process for durable audit.
+    from airflow_dq_agent.traces import record_quality_report
+
+    record_quality_report(report, dsn=dsn)
+    return report

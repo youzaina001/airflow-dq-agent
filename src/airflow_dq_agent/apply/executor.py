@@ -63,14 +63,13 @@ def _log_step(
 ) -> None:
     connection.execute(  # type: ignore[attr-defined]
         text(
-            "INSERT INTO dq.apply_log (run_id, action_id, table_name, sql_text, rowcount) "
-            "VALUES (:run_id, :action_id, :table_name, :sql_text, :rowcount)"
+            "INSERT INTO dq.apply_log (run_id, action_id, table_name, rowcount) "
+            "VALUES (:run_id, :action_id, :table_name, :rowcount)"
         ),
         {
             "run_id": run_id,
             "action_id": rendered.action_id,
             "table_name": rendered.table,
-            "sql_text": "controlled SQL redacted from durable audit",
             "rowcount": rowcount,
         },
     )
