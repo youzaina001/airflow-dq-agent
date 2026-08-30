@@ -47,6 +47,20 @@ def test_renderer_uses_compound_key_and_ignores_claimed_row_count() -> None:
     assert "999999" not in rendered.sql
 
 
+def test_quarantine_renderer_binds_json_primary_key_as_text() -> None:
+    rendered = render_step(
+        RemediationStep(
+            action_id="quarantine_nulls",
+            table="fact_orders",
+            params={"column": "total_amount", "pk_column": "order_id"},
+            rationale="test",
+            sql_preview="safe preview",
+        )
+    )
+
+    assert 'jsonb_build_object(CAST(:pk_key AS text), t."order_id")' in rendered.sql
+
+
 def test_renderer_rejects_unknown_column_and_forbidden_preview() -> None:
     unknown = RemediationStep(
         action_id="null_fill",
