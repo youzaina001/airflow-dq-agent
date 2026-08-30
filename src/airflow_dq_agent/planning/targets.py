@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from airflow_dq_agent.action_definitions import get_governed_action, render_plan_item
+from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import ExecutablePlanItem, TargetSet
 from airflow_dq_agent.warehouse.db import make_engine
@@ -43,7 +43,9 @@ class PostgresTargetSetResolver:
 
     def lock_and_resolve(self, connection: Connection, item: ExecutablePlanItem) -> TargetSet:
         """Select and lock precisely the rows whose fingerprint must match admission."""
-        rendered = render_plan_item(item, run_id="apply")
+        rendered = get_governed_action(item.action_id).render(
+            table=item.table, params=item.params, run_id="apply"
+        )
         target_sql = rendered.target_sql
         if target_sql is not None:
             target_sql = f"{target_sql} FOR UPDATE OF t"
@@ -51,7 +53,9 @@ class PostgresTargetSetResolver:
 
     def resolve_item(self, connection: Connection, item: ExecutablePlanItem) -> TargetSet:
         """Recompute a target summary in a read-only dry-run transaction."""
-        rendered = render_plan_item(item, run_id="dry-run")
+        rendered = get_governed_action(item.action_id).render(
+            table=item.table, params=item.params, run_id="dry-run"
+        )
         return self._select(connection, rendered.target_sql, rendered.target_params, item.table)
 
     @staticmethod

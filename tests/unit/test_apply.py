@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode, apply_plan
 from airflow_dq_agent.contracts.models import (
@@ -15,6 +16,7 @@ from airflow_dq_agent.contracts.models import (
     RemediationPlan,
     TargetSet,
 )
+from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
@@ -299,6 +301,22 @@ def test_quarantine_renderer_binds_json_primary_key_as_text() -> None:
     )
 
     assert 'jsonb_build_object(CAST(:pk_key AS text), t."order_id")' in rendered.sql
+
+
+def test_rendering_rejects_composite_primary_key_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    composite_contract = TABLE_CONTRACTS["fact_orders"].model_copy(
+        update={"primary_key": ["order_id", "customer_sk"]}
+    )
+    monkeypatch.setattr(action_definitions, "get_table_contract", lambda _: composite_contract)
+
+    with pytest.raises(ValueError, match="composite primary key"):
+        get_governed_action("quarantine_nulls").render(
+            table="fact_orders",
+            params={"column": "total_amount", "pk_column": "order_id"},
+            run_id="test-run",
+        )
 
 
 def test_governed_action_rejects_unknown_column() -> None:
