@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 import polars as pl
 
-from airflow_dq_agent.apply import render_controlled_action
+from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.quality import run_suite_on_frames
 from airflow_dq_agent.quality.registry import CHECK_SPECS, get_check_spec
@@ -130,14 +130,14 @@ def test_email_validity_is_the_contains_at_rule() -> None:
     )
     assert spec.quarantine_predicate == 't."email" IS NULL OR t."email" NOT LIKE \'%@%\''
 
-    rendered = render_controlled_action(
-        action_id="quarantine_invalids",
+    rendered = get_governed_action("quarantine_invalids").render(
         table="dim_customer",
         params={
             "check_id": spec.check_id,
             "column": "email",
             "pk_column": "customer_sk",
         },
+        run_id="test-run",
     )
     assert spec.quarantine_predicate in rendered.sql
     assert spec.quarantine_predicate in (rendered.target_sql or "")
