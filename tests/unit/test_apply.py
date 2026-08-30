@@ -1,8 +1,19 @@
+from pathlib import Path
+
 import pytest
 
 from airflow_dq_agent.apply import render_step
-from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode
-from airflow_dq_agent.contracts.models import RemediationStep
+from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode, apply_plan
+from airflow_dq_agent.contracts.models import (
+    CandidateAction,
+    Proposal,
+    QualityEvidence,
+    RemediationStep,
+    TargetSet,
+)
+from airflow_dq_agent.evals import evaluate_plan
+from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.quality.fixtures import seeded_failure_report
 
 
 class _RecordingConnection:
@@ -11,6 +22,78 @@ class _RecordingConnection:
 
     def execute(self, statement: object) -> None:
         self.statements.append(str(statement))
+
+
+class _RecordingTransaction:
+    def __init__(self) -> None:
+        self.connection = _RecordingConnection()
+
+    def __enter__(self) -> _RecordingConnection:
+        return self.connection
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+class _RecordingEngine:
+    def __init__(self) -> None:
+        self.transaction = _RecordingTransaction()
+
+    def begin(self) -> _RecordingTransaction:
+        return self.transaction
+
+
+class _TargetSets:
+    def resolve(self, **_: object) -> TargetSet:
+        return TargetSet(count=5, fingerprint="targets:orders-null-v1")
+
+
+class _MatchingTargetResolver:
+    def __init__(self, **_: object) -> None:
+        pass
+
+    def resolve_item(self, _: object, item: object) -> TargetSet:
+        return item.target_set  # type: ignore[union-attr]
+
+
+def test_dry_run_retains_applied_steps_on_the_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    report = seeded_failure_report()
+    failed = report.get("fact_orders.total_amount.completeness")
+    assert failed is not None
+    scoped_report = report.model_copy(update={"checks": [failed]})
+    candidate = Proposal(
+        summary="Quarantine rows with missing totals.",
+        root_cause_hypothesis="The source omitted a required value.",
+        candidate_actions=[
+            CandidateAction(
+                action_id="quarantine_nulls",
+                evidence=[
+                    QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                ],
+                rationale="Preserve source rows for review.",
+            )
+        ],
+        confidence=0.9,
+    )
+    plan = compile_remediation_plan(scoped_report, candidate, target_sets=_TargetSets())
+    evaluation = evaluate_plan(plan)
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+
+    result = apply_plan(
+        plan,
+        evaluation,
+        dry_run=True,
+        engine=_RecordingEngine(),  # type: ignore[arg-type]
+        run_id="unit-dry-run",
+    )
+
+    assert len(result.steps) == 1
+    assert result.steps[0].estimated_rows == 5
 
 
 def test_apply_uses_a_serializable_snapshot_before_target_locking() -> None:
