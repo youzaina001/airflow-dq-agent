@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from airflow_dq_agent.contracts.remediations import REMEDIATION_CATALOG, get_action
+from airflow_dq_agent.action_definitions import get_governed_action, list_remediation_actions
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.contracts.tables import get_table_contract as contract_for
 from airflow_dq_agent.lineage.graph import get_lineage as lineage_for
@@ -48,9 +48,9 @@ def get_lineage(table: str) -> dict[str, list[str]]:
 
 def list_remediations() -> list[dict[str, Any]]:
     """Return allow-listed remediation metadata only."""
-    return [_dump(action) for action in REMEDIATION_CATALOG.values()]
+    return [_dump(action) for action in list_remediation_actions()]
 
 
 def get_remediation(action_id: str) -> dict[str, Any]:
     """Return the metadata for one allow-listed action."""
-    return _dump(get_action(action_id))
+    return _dump(get_governed_action(action_id).metadata)

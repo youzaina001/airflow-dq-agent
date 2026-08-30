@@ -10,7 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from airflow_dq_agent.apply.renderer import RenderedStep, render_plan_item
+from airflow_dq_agent.action_definitions import (
+    RenderedStep,
+    get_governed_action,
+)
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
@@ -213,14 +216,17 @@ def apply_plan(
                         "Refusing apply: controlled target set changed after plan compilation"
                     )
             for item in executable:
-                rendered = render_plan_item(item, run_id=resolved_run_id)
+                action = get_governed_action(item.action_id)
+                rendered = action.render(
+                    table=item.table, params=item.params, run_id=resolved_run_id
+                )
                 if dry_run:
                     result.steps.append(
                         AppliedStep(rendered=rendered, estimated_rows=item.target_set.count)
                     )
                     continue
                 rowcount: int | None = 0
-                if rendered.estimate_sql is not None:
+                if action.mutates:
                     mutation = connection.execute(text(rendered.sql), rendered.params)
                     rowcount = int(mutation.rowcount) if mutation.rowcount is not None else None
                 result.steps.append(

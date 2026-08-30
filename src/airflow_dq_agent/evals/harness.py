@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from airflow_dq_agent.action_definitions import is_governed_action
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
@@ -15,7 +16,6 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.contracts.remediations import REMEDIATION_CATALOG
 from airflow_dq_agent.planning import current_policy_fingerprint
 
 _DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
@@ -119,7 +119,7 @@ def _allowlist_score(proposal: Proposal) -> EvalScore:
     unknown = sorted(
         action.action_id
         for action in proposal.candidate_actions
-        if action.action_id not in REMEDIATION_CATALOG
+        if not is_governed_action(action.action_id)
     )
     return _score(
         "allowlist_compliance",

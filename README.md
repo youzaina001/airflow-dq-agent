@@ -87,7 +87,8 @@ src/airflow_dq_agent/
   catalog/    # transport-free catalog plus FastMCP adapter
   agent/      # stub, replay, and opt-in read-only live proposal paths
   evals/      # deterministic proposal scorers and gates
-  apply/      # controlled renderer and transactional executor
+  action_definitions.py  # governed action metadata, derivation, and controlled rendering
+  apply/      # transactional executor
   planning/   # plan compiler, target-set resolver, and apply admission
   hitl.py     # structured ApprovalOperator response adapter
   traces/     # append-only JSONL and optional Postgres mirror
@@ -98,7 +99,8 @@ evals/cases/      # portable deterministic evaluation cases
 
 This is not a chatbot, LangChain demo, dbt Cloud integration, Kubernetes deployment,
 or a general warehouse console. It is a small portfolio operator that makes the
-autonomy boundary explicit and testable.
+autonomy boundary explicit and testable. Prefer deleting duplicated paths over adding
+another abstraction.
 
 ## Runtime verification
 
