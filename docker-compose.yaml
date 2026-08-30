@@ -18,6 +18,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: 'airflow:admin'
     _AIRFLOW_WWW_USER_USERNAME: airflow
     _AIRFLOW_WWW_USER_PASSWORD: airflow
+    AIRFLOW_UID: ${AIRFLOW_UID:-50000}
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
     PYTHONPATH: /opt/airflow/src
     WAREHOUSE_DSN: postgresql+psycopg://dq:dq@warehouse:5432/warehouse
