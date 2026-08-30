@@ -14,14 +14,17 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from airflow_dq_agent.contracts.models import Dimension
+from airflow_dq_agent.contracts.models import (
+    DestructiveRank,
+    Dimension,
+    ExecutablePlanItem,
+    NonExecutablePlanItem,
+)
 from airflow_dq_agent.contracts.remediations import (
-    REMEDIATION_CATALOG,
     RemediationAction,
-    get_action,
     validate_common_params,
 )
-from airflow_dq_agent.contracts.tables import TableContract, get_table_contract
+from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS, TableContract, get_table_contract
 from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 
 
@@ -45,7 +48,7 @@ ValidateAction = Callable[[TableContract, dict[str, Any]], list[str]]
 
 @dataclass(frozen=True)
 class GovernedAction:
-    """A deep module for one allow-listed remediation action."""
+    """The complete controlled behavior for one allow-listed remediation action."""
 
     metadata: RemediationAction
     _derive_params: DerivedParams
@@ -187,7 +190,7 @@ def _derive_dedupe(_: CheckSpec, contract: TableContract, params: dict[str, Any]
     return {**params, "pk_column": _single_pk(contract)}
 
 
-def _derive_fill(spec: CheckSpec, _: TableContract, params: dict[str, Any]) -> dict[str, Any]:
+def _derive_null_fill(spec: CheckSpec, _: TableContract, params: dict[str, Any]) -> dict[str, Any]:
     return {
         **params,
         "column": _require_column(spec, "null-fill policy does not name a target column"),
@@ -332,7 +335,7 @@ def _coerce_fill_value(contract: TableContract, column: str, value: Any) -> Any:
     raise ValueError(f"Unsupported contract dtype {dtype!r}")
 
 
-def _render_fill(
+def _render_null_fill(
     action: RemediationAction, contract: TableContract, params: dict[str, Any], _: str
 ) -> RenderedStep:
     column_name = str(params["column"])
@@ -350,42 +353,190 @@ def _render_fill(
     )
 
 
-def _action(
+def _governed_action(
     action_id: str,
+    description: str,
+    *,
+    mutates: bool,
+    destructive_rank: DestructiveRank,
+    reversible: bool,
+    required_params: list[str],
+    allowed_tables: frozenset[str],
+    preview_sql: str,
     derive: DerivedParams,
     render: RenderAction,
     validate: ValidateAction = _validate_no_op,
+    optional_params: list[str] | None = None,
+    notes: str = "",
 ) -> GovernedAction:
-    return GovernedAction(get_action(action_id), derive, render, validate)
+    return GovernedAction(
+        RemediationAction(
+            action_id=action_id,
+            description=description,
+            mutates=mutates,
+            destructive_rank=destructive_rank,
+            reversible=reversible,
+            required_params=required_params,
+            optional_params=optional_params or [],
+            allowed_tables=allowed_tables,
+            preview_sql=preview_sql,
+            notes=notes,
+        ),
+        derive,
+        render,
+        validate,
+    )
 
 
-GOVERNED_ACTIONS: dict[str, GovernedAction] = {
-    "no_op_alert": _action("no_op_alert", _derive_no_op, _render_no_op),
-    "quarantine_nulls": _action(
-        "quarantine_nulls", _derive_nulls, _render_nulls, _validate_primary_key
-    ),
-    "quarantine_invalids": _action(
-        "quarantine_invalids", _derive_invalids, _render_invalids, _validate_invalids
-    ),
-    "null_fill": _action("null_fill", _derive_fill, _render_fill),
-    "quarantine_orphans": _action(
-        "quarantine_orphans", _derive_orphans, _render_orphans, _validate_orphans
-    ),
-    "dedupe_keep_min_pk": _action(
-        "dedupe_keep_min_pk", _derive_dedupe, _render_dedupe, _validate_primary_key
-    ),
-    "schema_drift_ticket": _action("schema_drift_ticket", _derive_no_op, _render_no_op),
+_GOVERNED_ACTIONS: dict[str, GovernedAction] = {
+    action.action_id: action
+    for action in (
+        _governed_action(
+            "no_op_alert",
+            "Record the failure. Do not mutate.",
+            mutates=False,
+            destructive_rank=DestructiveRank.NONE,
+            reversible=True,
+            required_params=["check_id"],
+            allowed_tables=frozenset(TABLE_CONTRACTS),
+            preview_sql="-- no-op: alert only for {check_id} on {table}",
+            derive=_derive_no_op,
+            render=_render_no_op,
+        ),
+        _governed_action(
+            "quarantine_nulls",
+            "Copy rows where {column} IS NULL into dq.quarantine_rows; leave source intact until HITL.",
+            mutates=True,
+            destructive_rank=DestructiveRank.MEDIUM,
+            reversible=True,
+            required_params=["column", "pk_column"],
+            allowed_tables=frozenset(TABLE_CONTRACTS),
+            preview_sql=(
+                "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
+                "SELECT :run_id, :table, jsonb_build_object(:pk_column, t.{pk_column}), :reason, to_jsonb(t)\n"
+                "FROM warehouse.{table} t WHERE t.{column} IS NULL"
+            ),
+            derive=_derive_nulls,
+            render=_render_nulls,
+            validate=_validate_primary_key,
+            notes="Apply never DELETEs from the source in v1; quarantine is copy-only.",
+        ),
+        _governed_action(
+            "quarantine_invalids",
+            "Copy rows failing the controlled validity predicate into dq.quarantine_rows; leave source intact until HITL.",
+            mutates=True,
+            destructive_rank=DestructiveRank.MEDIUM,
+            reversible=True,
+            required_params=["check_id", "column", "pk_column"],
+            allowed_tables=frozenset(TABLE_CONTRACTS),
+            preview_sql=(
+                "INSERT INTO dq.quarantine_rows (...) SELECT ... FROM warehouse.{table} "
+                "WHERE <controlled validity predicate for {check_id}>"
+            ),
+            derive=_derive_invalids,
+            render=_render_invalids,
+            validate=_validate_invalids,
+            notes="The predicate is looked up from CHECK_SPECS by check_id. It is never supplied by an agent.",
+        ),
+        _governed_action(
+            "null_fill",
+            "UPDATE {table} SET {column} = :fill_value WHERE {column} IS NULL.",
+            mutates=True,
+            destructive_rank=DestructiveRank.LOW,
+            reversible=False,
+            required_params=["column", "fill_value"],
+            allowed_tables=frozenset({"fact_orders", "fact_visits", "dim_patient"}),
+            preview_sql="UPDATE warehouse.{table} SET {column} = :fill_value WHERE {column} IS NULL",
+            derive=_derive_null_fill,
+            render=_render_null_fill,
+            notes="fill_value is a bound parameter. Column must be in the table contract.",
+        ),
+        _governed_action(
+            "quarantine_orphans",
+            "Copy rows whose FK does not resolve into dq.quarantine_rows.",
+            mutates=True,
+            destructive_rank=DestructiveRank.MEDIUM,
+            reversible=True,
+            required_params=["fk_column", "ref_table", "ref_column", "pk_column"],
+            allowed_tables=frozenset(
+                {
+                    "fact_order_items",
+                    "fact_orders",
+                    "fact_visits",
+                    "fact_adverse_events",
+                    "dim_patient",
+                }
+            ),
+            preview_sql=(
+                "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
+                "SELECT :run_id, :table, jsonb_build_object(:pk_column, t.{pk_column}), :reason, to_jsonb(t)\n"
+                "FROM warehouse.{table} t\n"
+                "LEFT JOIN warehouse.{ref_table} r ON r.{ref_column} = t.{fk_column}\n"
+                "WHERE r.{ref_column} IS NULL"
+            ),
+            derive=_derive_orphans,
+            render=_render_orphans,
+            validate=_validate_orphans,
+        ),
+        _governed_action(
+            "dedupe_keep_min_pk",
+            "Copy duplicate business-key rows (keep min pk) into quarantine. Source is not deleted in v1.",
+            mutates=True,
+            destructive_rank=DestructiveRank.HIGH,
+            reversible=True,
+            required_params=["business_key", "pk_column"],
+            allowed_tables=frozenset({"fact_orders", "dim_patient", "dim_customer"}),
+            preview_sql=(
+                "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
+                "SELECT :run_id, :table, jsonb_build_object(:pk_column, t.{pk_column}), :reason, to_jsonb(t)\n"
+                "FROM warehouse.{table} t\n"
+                "WHERE t.{pk_column} NOT IN (\n"
+                "  SELECT MIN(s.{pk_column}) FROM warehouse.{table} s GROUP BY s.{business_key}\n"
+                ")"
+            ),
+            derive=_derive_dedupe,
+            render=_render_dedupe,
+            validate=_validate_primary_key,
+            notes="HIGH rank: HITL must approve. v1 copies dupes; it does not DELETE.",
+        ),
+        _governed_action(
+            "schema_drift_ticket",
+            "Do not auto-migrate. Open a contract change; humans update TABLE_CONTRACTS.",
+            mutates=False,
+            destructive_rank=DestructiveRank.NONE,
+            reversible=True,
+            required_params=["check_id"],
+            allowed_tables=frozenset(TABLE_CONTRACTS),
+            preview_sql="-- schema drift is a contract change, not a DML step",
+            derive=_derive_no_op,
+            render=_render_no_op,
+        ),
+    )
 }
 
-if set(GOVERNED_ACTIONS) != set(REMEDIATION_CATALOG):
-    raise RuntimeError("Every catalogued remediation action must have exactly one implementation")
+
+def get_governed_action(action_id: str) -> GovernedAction:
+    if action_id not in _GOVERNED_ACTIONS:
+        raise KeyError(f"Unknown action_id {action_id!r}. Allow-list: {sorted(_GOVERNED_ACTIONS)}")
+    return _GOVERNED_ACTIONS[action_id]
 
 
-def get_action_definition(action_id: str) -> GovernedAction:
-    if action_id not in GOVERNED_ACTIONS:
-        raise KeyError(f"Unknown action_id {action_id!r}. Allow-list: {sorted(GOVERNED_ACTIONS)}")
-    return GOVERNED_ACTIONS[action_id]
+def list_remediation_actions() -> tuple[RemediationAction, ...]:
+    """Return the metadata for every governed remediation action."""
+    return tuple(action.metadata for action in _GOVERNED_ACTIONS.values())
 
 
-def derive_action_params(spec: CheckSpec, action_id: str) -> dict[str, Any]:
-    return get_action_definition(action_id).derive_params(spec)
+def is_governed_action(action_id: str) -> bool:
+    """Return whether an action ID is registered for governed execution."""
+    return action_id in _GOVERNED_ACTIONS
+
+
+def render_plan_item(
+    item: ExecutablePlanItem | NonExecutablePlanItem, *, run_id: str = "dry-run"
+) -> RenderedStep:
+    """Render one executable plan item from its governed action definition."""
+    if not isinstance(item, ExecutablePlanItem):
+        raise ValueError("Cannot render a non-executable remediation plan item")
+    return get_governed_action(item.action_id).render(
+        table=item.table, params=item.params, run_id=run_id
+    )
