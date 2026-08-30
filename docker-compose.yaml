@@ -179,7 +179,7 @@ services:
       - -c
       - |
         mkdir -p /sources/logs /sources/dags /sources/plugins /sources/config /sources/traces
-        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins,config,traces}
+        chown -R "$${AIRFLOW_UID}:0" /sources/{logs,dags,plugins,config,traces}
         exec /entrypoint airflow version
     environment:
       <<: *airflow-common-env
