@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 from airflow_dq_agent.contracts.models import DestructiveRank
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS, get_table_contract
-from airflow_dq_agent.quality.registry import CHECK_SPECS
 
 
 class RemediationAction(BaseModel):
@@ -138,16 +137,14 @@ def get_action(action_id: str) -> RemediationAction:
     return REMEDIATION_CATALOG[action_id]
 
 
-def validate_step_params(action_id: str, table: str, params: dict[str, Any]) -> list[str]:
-    """Return human-readable violations. Empty list means the step is bindable."""
+def validate_common_params(
+    action: RemediationAction, table: str, params: dict[str, Any]
+) -> list[str]:
+    """Validate metadata shared by every governed remediation action."""
     errors: list[str] = []
-    try:
-        action = get_action(action_id)
-    except KeyError as exc:
-        return [str(exc)]
     table_key = table.split(".")[-1]
     if table_key not in action.allowed_tables:
-        errors.append(f"{action_id} is not allowed on {table_key}")
+        errors.append(f"{action.action_id} is not allowed on {table_key}")
         return errors
     try:
         contract = get_table_contract(table_key)
@@ -198,31 +195,15 @@ def validate_step_params(action_id: str, table: str, params: dict[str, Any]) -> 
                         errors.append(f"{value!r} is not a column on {ref_contract.table}")
                 except KeyError:
                     pass
-    if action_id == "quarantine_invalids":
-        check_id = params.get("check_id")
-        if not isinstance(check_id, str) or check_id not in CHECK_SPECS:
-            errors.append("check_id must name a declared check")
-        else:
-            spec = CHECK_SPECS[check_id]
-            if spec.table != table_key:
-                errors.append(f"check_id {check_id!r} is not defined for {table_key}")
-            if spec.dimension.value != "validity":
-                errors.append(f"check_id {check_id!r} is not a validity check")
-            if params.get("column") != spec.column:
-                errors.append(f"column must match the declared check column {spec.column!r}")
-    if (
-        action_id
-        in {
-            "quarantine_nulls",
-            "quarantine_invalids",
-            "quarantine_orphans",
-            "dedupe_keep_min_pk",
-        }
-        and params.get("pk_column") not in contract.primary_key
-    ):
-        errors.append("pk_column must be a contracted primary-key column")
-    if action_id == "quarantine_orphans":
-        foreign_key = (params.get("fk_column"), params.get("ref_table"), params.get("ref_column"))
-        if foreign_key not in contract.foreign_keys:
-            errors.append("fk_column/ref_table/ref_column must match a contracted foreign key")
     return errors
+
+
+def validate_step_params(action_id: str, table: str, params: dict[str, Any]) -> list[str]:
+    """Return action-specific bindability violations through the governed action seam."""
+    from airflow_dq_agent.action_definitions import get_action_definition
+
+    try:
+        action = get_action_definition(action_id)
+    except KeyError as exc:
+        return [str(exc)]
+    return action.validate_params(table, params)
