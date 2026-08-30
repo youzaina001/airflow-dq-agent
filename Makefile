@@ -2,8 +2,10 @@
 # Default path never talks to an LLM and never mutates the warehouse.
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+AIRFLOW_UID ?= $(shell id -u)
 export LLM_MODE ?= stub
 export APPLY_MODE ?= off
+export AIRFLOW_UID
 export WAREHOUSE_DSN ?= postgresql+psycopg://dq:dq@localhost:5433/warehouse
 export TRACES_DIR ?= traces
 

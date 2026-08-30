@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -18,6 +19,12 @@ from airflow_dq_agent.quality import run_quality_suite
 from airflow_dq_agent.warehouse.db import make_engine
 from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.warehouse.seed import seed_warehouse
+
+
+@pytest.fixture(autouse=True)
+def isolated_trace_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep host integration runs independent of Compose-mounted trace ownership."""
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
 
 
 @pytest.fixture(scope="module")

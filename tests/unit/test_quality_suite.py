@@ -2,11 +2,14 @@ from datetime import date, datetime
 
 import polars as pl
 
+from airflow_dq_agent.apply import render_controlled_action
+from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.quality import run_suite_on_frames
+from airflow_dq_agent.quality.registry import CHECK_SPECS, get_check_spec
 
 
-def test_polars_pandera_suite_runs_on_contracted_frames() -> None:
-    frames = {
+def _contracted_frames() -> dict[str, pl.DataFrame]:
+    return {
         "dim_customer": pl.DataFrame(
             {
                 "customer_sk": [1],
@@ -80,6 +83,61 @@ def test_polars_pandera_suite_runs_on_contracted_frames() -> None:
             }
         ),
     }
-    report = run_suite_on_frames(frames)
+
+
+def test_suite_emits_only_catalogued_checks() -> None:
+    report = run_suite_on_frames(_contracted_frames())
     assert report.failed_count == 0
-    assert len(report.checks) == 31
+    assert report.check_ids == set(CHECK_SPECS)
+    assert {f"{table}.schema_drift" for table in TABLE_CONTRACTS} <= set(CHECK_SPECS)
+
+
+def test_catalogued_completeness_check_fails_null_rows() -> None:
+    frames = _contracted_frames()
+    frames["fact_orders"] = frames["fact_orders"].with_columns(
+        pl.lit(None).cast(pl.Float64).alias("total_amount")
+    )
+    report = run_suite_on_frames(frames)
+    check = report.get("fact_orders.total_amount.completeness")
+    assert check is not None
+    assert check.n_failed == 1
+    assert check.failed
+
+
+def test_email_validity_is_the_contains_at_rule() -> None:
+    frames = _contracted_frames()
+    frames["dim_customer"] = pl.DataFrame(
+        {
+            "customer_sk": [1, 2, 3],
+            "customer_nk": ["C1", "C2", "C3"],
+            "email": ["c1@example.test", "user@localhost", "c3.invalid"],
+            "country": ["US", "US", "US"],
+            "signup_date": [date(2025, 1, 1), date(2025, 1, 1), date(2025, 1, 1)],
+            "is_active": [True, True, True],
+        }
+    )
+    report = run_suite_on_frames(frames)
+    check = report.get("dim_customer.email.validity")
+    assert check is not None
+    assert check.n_failed == 1
+    assert check.sample_failures[0]["email"] == "c3.invalid"
+
+    spec = get_check_spec("dim_customer.email.validity")
+    assert spec.sample_sql == (
+        "SELECT customer_sk, email FROM warehouse.dim_customer "
+        "WHERE email IS NULL OR email NOT LIKE '%@%' "
+        "ORDER BY customer_sk LIMIT :limit"
+    )
+    assert spec.quarantine_predicate == 't."email" IS NULL OR t."email" NOT LIKE \'%@%\''
+
+    rendered = render_controlled_action(
+        action_id="quarantine_invalids",
+        table="dim_customer",
+        params={
+            "check_id": spec.check_id,
+            "column": "email",
+            "pk_column": "customer_sk",
+        },
+    )
+    assert spec.quarantine_predicate in rendered.sql
+    assert spec.quarantine_predicate in (rendered.target_sql or "")

@@ -1,0 +1,21 @@
+# Overlay on Apache Airflow 3.1.5 constraints-no-providers-3.12.txt.
+# The base is published by Apache; these replacements are reviewed in-repo.
+# Official no-providers still pin SQLAlchemy 1.4.54; the warehouse DSN is
+# postgresql+psycopg, which needs SQLAlchemy 2.
+SQLAlchemy==2.0.36
+# pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0; keep the OTel
+# 1.28 set together (Airflow 3.1.5 allows >=1.27.0).
+opentelemetry-api==1.28.0
+opentelemetry-sdk==1.28.0
+opentelemetry-exporter-otlp==1.28.0
+opentelemetry-exporter-otlp-proto-common==1.28.0
+opentelemetry-exporter-otlp-proto-grpc==1.28.0
+opentelemetry-exporter-otlp-proto-http==1.28.0
+opentelemetry-proto==1.28.0
+opentelemetry-semantic-conventions==0.49b0
+# The image includes Airflow's Prometheus exporter. It must match the OTel 1.28 SDK.
+opentelemetry-exporter-prometheus==0.49b0
+# FAB 3.8 supports SQLAlchemy 2 and requires the current PyJWT release.
+PyJWT==2.11.0
+# opentelemetry-proto 1.28 needs protobuf 5; Airflow still allows it.
+protobuf==5.29.5

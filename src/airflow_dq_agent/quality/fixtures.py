@@ -119,6 +119,10 @@ def seeded_failure_report() -> QualitySuiteReport:
         _pass("dim_patient.site_sk.referential_integrity", 83),
         _pass("fact_adverse_events.patient_sk.referential_integrity", 35),
     ]
+    present = {check.check_id for check in checks}
+    checks.extend(
+        _pass(check_id, n_total=100) for check_id in CHECK_SPECS if check_id not in present
+    )
     observed = {name: list(c.column_names) for name, c in TABLE_CONTRACTS.items()}
     observed["dim_customer"] = [*TABLE_CONTRACTS["dim_customer"].column_names, "shadow_segment"]
     return QualitySuiteReport(checks=checks, observed_columns=observed)
@@ -126,18 +130,6 @@ def seeded_failure_report() -> QualitySuiteReport:
 
 def green_report() -> QualitySuiteReport:
     """All contracted checks pass. Used to prove evals reject a spurious proposal."""
-    checks = [
-        _pass(check_id, n_total=100)
-        for check_id in CHECK_SPECS
-        if check_id.endswith(
-            (
-                ".completeness",
-                ".validity",
-                ".uniqueness",
-                ".referential_integrity",
-                ".schema_drift",
-            )
-        )
-    ]
+    checks = [_pass(check_id, n_total=100) for check_id in CHECK_SPECS]
     observed = {name: list(c.column_names) for name, c in TABLE_CONTRACTS.items()}
     return QualitySuiteReport(checks=checks, observed_columns=observed)
