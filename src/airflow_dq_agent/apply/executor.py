@@ -10,8 +10,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from airflow_dq_agent.action_definitions import get_action_definition
-from airflow_dq_agent.apply.renderer import RenderedStep, render_plan_item
+from airflow_dq_agent.action_definitions import (
+    RenderedStep,
+    get_governed_action,
+    render_plan_item,
+)
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
@@ -43,11 +46,6 @@ class ApplyResult(BaseModel):
     plan_id: str | None = None
     admission_id: str | None = None
     steps: list[AppliedStep] = Field(default_factory=list)
-
-
-def _action_mutates(rendered: RenderedStep) -> bool:
-    """Keep DML authority in the action definition, not renderer query fields."""
-    return get_action_definition(rendered.action_id).mutates
 
 
 def _require_plan_admission(
@@ -226,7 +224,7 @@ def apply_plan(
                     )
                     continue
                 rowcount: int | None = 0
-                if _action_mutates(rendered):
+                if get_governed_action(item.action_id).mutates:
                     mutation = connection.execute(text(rendered.sql), rendered.params)
                     rowcount = int(mutation.rowcount) if mutation.rowcount is not None else None
                 result.steps.append(

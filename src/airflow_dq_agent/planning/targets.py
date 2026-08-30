@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from airflow_dq_agent.apply.renderer import render_controlled_action, render_plan_item
+from airflow_dq_agent.action_definitions import get_governed_action, render_plan_item
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import ExecutablePlanItem, TargetSet
 from airflow_dq_agent.warehouse.db import make_engine
@@ -35,8 +35,8 @@ class PostgresTargetSetResolver:
     ) -> TargetSet:
         """Return the exact current controlled target summary for plan compilation."""
         del report_run_id, check_id
-        rendered = render_controlled_action(
-            action_id=action_id, table=table, params=params, run_id="target-set"
+        rendered = get_governed_action(action_id).render(
+            table=table, params=params, run_id="target-set"
         )
         with self._engine.connect() as connection:
             return self._select(connection, rendered.target_sql, rendered.target_params, table)

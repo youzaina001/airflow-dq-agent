@@ -1,6 +1,6 @@
 import pytest
 
-from airflow_dq_agent.apply import render_plan_item
+from airflow_dq_agent.action_definitions import render_plan_item
 from airflow_dq_agent.contracts import (
     CandidateAction,
     ExecutablePlanItem,

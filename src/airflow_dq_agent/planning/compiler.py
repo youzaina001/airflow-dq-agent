@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from airflow_dq_agent.action_definitions import derive_action_params, get_action_definition
+from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
@@ -19,7 +19,7 @@ from airflow_dq_agent.contracts.models import (
 from airflow_dq_agent.contracts.tables import get_table_contract
 from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 
-RENDERER_VERSION = "controlled-renderer-v3"
+RENDERER_VERSION = "controlled-renderer-v2"
 
 
 class TargetSetResolver(Protocol):
@@ -37,7 +37,7 @@ class TargetSetResolver(Protocol):
 
 
 def _policy_fingerprint(specs: Sequence[CheckSpec], action_id: str) -> str:
-    action = get_action_definition(action_id).metadata
+    action = get_governed_action(action_id).metadata
     return canonical_fingerprint(
         {
             "contracts": [get_table_contract(spec.table).model_dump(mode="json") for spec in specs],
@@ -113,8 +113,9 @@ def compile_remediation_plan(
                 raise ValueError("requested action is not declared by the check policy")
             if any(spec.table != specs[0].table for spec in specs):
                 raise ValueError("one plan item cannot target more than one contracted table")
-            params = derive_action_params(specs[0], requested.action_id)
-            if any(derive_action_params(spec, requested.action_id) != params for spec in specs[1:]):
+            governed_action = get_governed_action(requested.action_id)
+            params = governed_action.derive_params(specs[0])
+            if any(governed_action.derive_params(spec) != params for spec in specs[1:]):
                 raise ValueError("evidence requires incompatible controlled parameter values")
             target_set = target_sets.resolve(
                 report_run_id=report.run_id,

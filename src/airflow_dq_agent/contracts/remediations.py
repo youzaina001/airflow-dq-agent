@@ -1,4 +1,4 @@
-"""Allow-listed remediations. The apply engine renders these templates; agent SQL is never executed."""
+"""Metadata shared by allow-listed governed remediation actions."""
 
 from __future__ import annotations
 
@@ -21,120 +21,6 @@ class RemediationAction(BaseModel):
     allowed_tables: frozenset[str]
     preview_sql: str
     notes: str = ""
-
-
-# Identifiers in preview_sql are placeholders; apply binds via quoted identifiers.
-REMEDIATION_CATALOG: dict[str, RemediationAction] = {
-    "no_op_alert": RemediationAction(
-        action_id="no_op_alert",
-        description="Record the failure. Do not mutate.",
-        mutates=False,
-        destructive_rank=DestructiveRank.NONE,
-        reversible=True,
-        required_params=["check_id"],
-        allowed_tables=frozenset(TABLE_CONTRACTS),
-        preview_sql="-- no-op: alert only for {check_id} on {table}",
-    ),
-    "quarantine_nulls": RemediationAction(
-        action_id="quarantine_nulls",
-        description="Copy rows where {column} IS NULL into dq.quarantine_rows; leave source intact until HITL.",
-        mutates=True,
-        destructive_rank=DestructiveRank.MEDIUM,
-        reversible=True,
-        required_params=["column", "pk_column"],
-        allowed_tables=frozenset(TABLE_CONTRACTS),
-        preview_sql=(
-            "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
-            "SELECT :run_id, :table, jsonb_build_object(:pk_column, t.{pk_column}), :reason, to_jsonb(t)\n"
-            "FROM warehouse.{table} t WHERE t.{column} IS NULL"
-        ),
-        notes="Apply never DELETEs from the source in v1; quarantine is copy-only.",
-    ),
-    "quarantine_invalids": RemediationAction(
-        action_id="quarantine_invalids",
-        description=(
-            "Copy rows failing the controlled validity predicate into dq.quarantine_rows; "
-            "leave source intact until HITL."
-        ),
-        mutates=True,
-        destructive_rank=DestructiveRank.MEDIUM,
-        reversible=True,
-        required_params=["check_id", "column", "pk_column"],
-        allowed_tables=frozenset(TABLE_CONTRACTS),
-        preview_sql=(
-            "INSERT INTO dq.quarantine_rows (...) SELECT ... FROM warehouse.{table} "
-            "WHERE <controlled validity predicate for {check_id}>"
-        ),
-        notes=(
-            "The predicate is looked up from CHECK_SPECS by check_id. It is never supplied by an agent."
-        ),
-    ),
-    "null_fill": RemediationAction(
-        action_id="null_fill",
-        description="UPDATE {table} SET {column} = :fill_value WHERE {column} IS NULL.",
-        mutates=True,
-        destructive_rank=DestructiveRank.LOW,
-        reversible=False,
-        required_params=["column", "fill_value"],
-        allowed_tables=frozenset({"fact_orders", "fact_visits", "dim_patient"}),
-        preview_sql=("UPDATE warehouse.{table} SET {column} = :fill_value WHERE {column} IS NULL"),
-        notes="fill_value is a bound parameter. Column must be in the table contract.",
-    ),
-    "quarantine_orphans": RemediationAction(
-        action_id="quarantine_orphans",
-        description="Copy rows whose FK does not resolve into dq.quarantine_rows.",
-        mutates=True,
-        destructive_rank=DestructiveRank.MEDIUM,
-        reversible=True,
-        required_params=["fk_column", "ref_table", "ref_column", "pk_column"],
-        allowed_tables=frozenset(
-            {"fact_order_items", "fact_orders", "fact_visits", "fact_adverse_events", "dim_patient"}
-        ),
-        preview_sql=(
-            "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
-            "SELECT :run_id, :table, jsonb_build_object(:pk_column, t.{pk_column}), :reason, to_jsonb(t)\n"
-            "FROM warehouse.{table} t\n"
-            "LEFT JOIN warehouse.{ref_table} r ON r.{ref_column} = t.{fk_column}\n"
-            "WHERE r.{ref_column} IS NULL"
-        ),
-    ),
-    "dedupe_keep_min_pk": RemediationAction(
-        action_id="dedupe_keep_min_pk",
-        description="Copy duplicate business-key rows (keep min pk) into quarantine. Source is not deleted in v1.",
-        mutates=True,
-        destructive_rank=DestructiveRank.HIGH,
-        reversible=True,
-        required_params=["business_key", "pk_column"],
-        allowed_tables=frozenset({"fact_orders", "dim_patient", "dim_customer"}),
-        preview_sql=(
-            "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
-            "SELECT :run_id, :table, jsonb_build_object(:pk_column, t.{pk_column}), :reason, to_jsonb(t)\n"
-            "FROM warehouse.{table} t\n"
-            "WHERE t.{pk_column} NOT IN (\n"
-            "  SELECT MIN(s.{pk_column}) FROM warehouse.{table} s GROUP BY s.{business_key}\n"
-            ")"
-        ),
-        notes="HIGH rank: HITL must approve. v1 copies dupes; it does not DELETE.",
-    ),
-    "schema_drift_ticket": RemediationAction(
-        action_id="schema_drift_ticket",
-        description="Do not auto-migrate. Open a contract change; humans update TABLE_CONTRACTS.",
-        mutates=False,
-        destructive_rank=DestructiveRank.NONE,
-        reversible=True,
-        required_params=["check_id"],
-        allowed_tables=frozenset(TABLE_CONTRACTS),
-        preview_sql="-- schema drift is a contract change, not a DML step",
-    ),
-}
-
-
-def get_action(action_id: str) -> RemediationAction:
-    if action_id not in REMEDIATION_CATALOG:
-        raise KeyError(
-            f"Unknown action_id {action_id!r}. Allow-list: {sorted(REMEDIATION_CATALOG)}"
-        )
-    return REMEDIATION_CATALOG[action_id]
 
 
 def validate_common_params(
@@ -196,14 +82,3 @@ def validate_common_params(
                 except KeyError:
                     pass
     return errors
-
-
-def validate_step_params(action_id: str, table: str, params: dict[str, Any]) -> list[str]:
-    """Return action-specific bindability violations through the governed action seam."""
-    from airflow_dq_agent.action_definitions import get_action_definition
-
-    try:
-        action = get_action_definition(action_id)
-    except KeyError as exc:
-        return [str(exc)]
-    return action.validate_params(table, params)
