@@ -3,7 +3,12 @@ from pathlib import Path
 import pytest
 
 from airflow_dq_agent.apply import render_step
-from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode, apply_plan
+from airflow_dq_agent.apply.executor import (
+    _action_mutates,
+    _set_controlled_transaction_mode,
+    apply_plan,
+)
+from airflow_dq_agent.apply.renderer import RenderedStep
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
     Proposal,
@@ -113,6 +118,24 @@ def test_dry_run_uses_the_same_serializable_snapshot_and_read_only_authority() -
         "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
         "SET TRANSACTION READ ONLY",
     ]
+
+
+def test_apply_dml_authority_comes_from_action_metadata_not_rendered_queries() -> None:
+    assert not _action_mutates(
+        RenderedStep(
+            action_id="no_op_alert",
+            table="fact_orders",
+            sql="-- no-op",
+            estimate_sql="SELECT 1",
+        )
+    )
+    assert _action_mutates(
+        RenderedStep(
+            action_id="null_fill",
+            table="fact_orders",
+            sql="UPDATE warehouse.fact_orders SET total_amount = 0",
+        )
+    )
 
 
 def test_renderer_uses_compound_key_and_ignores_claimed_row_count() -> None:
