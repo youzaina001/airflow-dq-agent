@@ -27,14 +27,12 @@ from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 
 
 class RenderedStep(BaseModel):
-    """A bindable statement and controlled count query derived from one allowed action."""
+    """A bindable statement and controlled target query derived from one allowed action."""
 
     action_id: str
     table: str
     sql: str
     params: dict[str, Any] = Field(default_factory=dict)
-    estimate_sql: str | None = None
-    estimate_params: dict[str, Any] = Field(default_factory=dict)
     target_sql: str | None = None
     target_params: dict[str, Any] = Field(default_factory=dict)
 
@@ -197,7 +195,7 @@ def _derive_null_fill(spec: CheckSpec, _: TableContract, params: dict[str, Any])
 
 def _quarantine_queries(
     contract: TableContract, pk_column: str, where_clause: str, *, join_clause: str = ""
-) -> tuple[str, str, str]:
+) -> tuple[str, str]:
     table = _qualified(contract)
     pk = _quote(pk_column)
     return (
@@ -206,7 +204,6 @@ def _quarantine_queries(
         + pk
         + "), :reason, to_jsonb(t)\n"
         + f"FROM {table} t{join_clause}\nWHERE {where_clause}",
-        f"SELECT COUNT(*) FROM {table} t{join_clause} WHERE {where_clause}",
         f"SELECT t.{pk} FROM {table} t{join_clause} WHERE {where_clause} ORDER BY t.{pk}",
     )
 
@@ -220,7 +217,7 @@ def _quarantine_step(
     join_clause: str = "",
 ) -> RenderedStep:
     pk_column = _single_pk(contract)
-    sql, estimate_sql, target_sql = _quarantine_queries(
+    sql, target_sql = _quarantine_queries(
         contract, pk_column, where_clause, join_clause=join_clause
     )
     common = {
@@ -234,8 +231,6 @@ def _quarantine_step(
         table=contract.table,
         sql=sql,
         params=common,
-        estimate_sql=estimate_sql,
-        estimate_params=common,
         target_sql=target_sql,
     )
 
@@ -349,12 +344,11 @@ def _render_null_fill(
         table=contract.table,
         sql=f"UPDATE {table} SET {column} = :fill_value WHERE {column} IS NULL",
         params={"fill_value": fill_value},
-        estimate_sql=f"SELECT COUNT(*) FROM {table} t WHERE t.{column} IS NULL",
         target_sql=f"SELECT t.{pk} FROM {table} t WHERE t.{column} IS NULL ORDER BY t.{pk}",
     )
 
 
-def _governed_action(
+def _register_governed_action(
     action_id: str,
     description: str,
     *,
@@ -392,7 +386,7 @@ def _governed_action(
 _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
     action.action_id: action
     for action in (
-        _governed_action(
+        _register_governed_action(
             "no_op_alert",
             "Record the failure. Do not mutate.",
             mutates=False,
@@ -404,7 +398,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             derive=_derive_no_op,
             render=_render_no_op,
         ),
-        _governed_action(
+        _register_governed_action(
             "quarantine_nulls",
             "Copy rows where {column} IS NULL into dq.quarantine_rows; leave source intact until HITL.",
             mutates=True,
@@ -422,7 +416,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             validate=_validate_primary_key,
             notes="Apply never DELETEs from the source in v1; quarantine is copy-only.",
         ),
-        _governed_action(
+        _register_governed_action(
             "quarantine_invalids",
             "Copy rows failing the controlled validity predicate into dq.quarantine_rows; leave source intact until HITL.",
             mutates=True,
@@ -439,7 +433,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             validate=_validate_invalids,
             notes="The predicate is looked up from CHECK_SPECS by check_id. It is never supplied by an agent.",
         ),
-        _governed_action(
+        _register_governed_action(
             "null_fill",
             "UPDATE {table} SET {column} = :fill_value WHERE {column} IS NULL.",
             mutates=True,
@@ -452,7 +446,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             render=_render_null_fill,
             notes="fill_value is a bound parameter. Column must be in the table contract.",
         ),
-        _governed_action(
+        _register_governed_action(
             "quarantine_orphans",
             "Copy rows whose FK does not resolve into dq.quarantine_rows.",
             mutates=True,
@@ -479,7 +473,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             render=_render_orphans,
             validate=_validate_orphans,
         ),
-        _governed_action(
+        _register_governed_action(
             "dedupe_keep_min_pk",
             "Copy duplicate business-key rows (keep min pk) into quarantine. Source is not deleted in v1.",
             mutates=True,
@@ -500,7 +494,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             validate=_validate_primary_key,
             notes="HIGH rank: HITL must approve. v1 copies dupes; it does not DELETE.",
         ),
-        _governed_action(
+        _register_governed_action(
             "schema_drift_ticket",
             "Do not auto-migrate. Open a contract change; humans update TABLE_CONTRACTS.",
             mutates=False,
