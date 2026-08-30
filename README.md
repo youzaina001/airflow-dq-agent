@@ -103,9 +103,10 @@ autonomy boundary explicit and testable.
 ## Runtime verification
 
 `make compose-smoke` is the deterministic PR path. It builds the pinned Airflow
-3.1.5/Python 3.12 image against official constraints, starts Compose in stub/shadow
-mode, seeds the warehouse, parses and runs `dq_daily`, then verifies persisted
-lineage and zero quarantine rows.
+3.1.5/Python 3.12 image against Apache's `constraints-no-providers` file plus the
+repository-reviewed constraint overlay required by the SQLAlchemy 2 and common-AI
+provider stack. It then starts Compose in stub/shadow mode, seeds the warehouse,
+parses and runs `dq_daily`, then verifies persisted lineage and zero quarantine rows.
 
 Before a release or demo, manually verify a live approval and rejection in Compose
 with `APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed

@@ -199,7 +199,6 @@ def apply_plan(
         plan_id=plan.plan_id,
         admission_id=admission.admission_id if admission else None,
     )
-    applied = result.steps
     try:
         with database.begin() as connection:
             _set_controlled_transaction_mode(connection, dry_run=dry_run)
@@ -216,7 +215,7 @@ def apply_plan(
             for item in executable:
                 rendered = render_plan_item(item, run_id=resolved_run_id)
                 if dry_run:
-                    applied.append(
+                    result.steps.append(
                         AppliedStep(rendered=rendered, estimated_rows=item.target_set.count)
                     )
                     continue
@@ -224,13 +223,13 @@ def apply_plan(
                 if rendered.estimate_sql is not None:
                     mutation = connection.execute(text(rendered.sql), rendered.params)
                     rowcount = int(mutation.rowcount) if mutation.rowcount is not None else None
-                applied.append(
+                result.steps.append(
                     AppliedStep(
                         rendered=rendered, estimated_rows=item.target_set.count, rowcount=rowcount
                     )
                 )
             result.fingerprint = _result_fingerprint(
-                plan, admission, resolved_run_id, dry_run, applied
+                plan, admission, resolved_run_id, dry_run, result.steps
             )
             event = apply_result_event(
                 plan,
@@ -257,7 +256,7 @@ def apply_plan(
             admission,
             result_id=result.apply_result_id,
             result_fingerprint=_result_fingerprint(
-                plan, admission, resolved_run_id, dry_run, applied
+                plan, admission, resolved_run_id, dry_run, result.steps
             ),
             dry_run=True,
             reasons=["controlled apply failed before a result could be admitted"],
