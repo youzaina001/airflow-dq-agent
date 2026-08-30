@@ -80,7 +80,7 @@ TABLE_CONTRACTS: dict[str, TableContract] = {
         columns=[
             _c("customer_sk", "int64", unique=True),
             _c("customer_nk", "utf8", unique=True, description="Business key"),
-            _c("email", "utf8", description="Must match simple email regex"),
+            _c("email", "utf8", description="Must contain @"),
             _c("country", "utf8"),
             _c("signup_date", "date"),
             _c("is_active", "bool"),
