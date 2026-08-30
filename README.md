@@ -57,6 +57,13 @@ Then open `http://localhost:8080` (`airflow` / `airflow`). `dq_daily` is paused 
 creation. `make integration` additionally exercises the database path when Docker is
 available.
 
+For a guided walkthrough of the fixture, replay, Compose shadow, HITL, and live-model
+paths, see [HANDS_ON_GUIDE.md](HANDS_ON_GUIDE.md).
+
+Open work and implementation order live in
+[GitHub Issues](https://github.com/youzaina001/airflow-dq-agent/issues) and
+[Milestones](https://github.com/youzaina001/airflow-dq-agent/milestones).
+
 ## Safety boundary
 
 There is intentionally no `SQLToolset.query`. Live mode exposes only catalog reads,
@@ -98,7 +105,16 @@ evals/cases/      # portable deterministic evaluation cases
 
 This is not a chatbot, LangChain demo, dbt Cloud integration, Kubernetes deployment,
 or a general warehouse console. It is a small portfolio operator that makes the
-autonomy boundary explicit and testable.
+autonomy boundary explicit and testable. New work stays inside that boundary: the
+model may propose typed action IDs and report-scoped evidence, never SQL, table
+names, values, or primary keys for execution. A new quality check needs one shared
+predicate and parity coverage before it can authorize a remediation. A new mutation
+needs a declared check policy, deterministic targets, plan evaluation, audited
+whole-plan admission, and a controlled transaction. Prefer deleting duplicated
+paths over adding another abstraction. Do not add free-form SQL chat, autonomous
+repair, or a broader remediation catalog before the existing authority and lineage
+guarantees are proven. `LLM_MODE=stub` and `APPLY_MODE=off` remain the local and CI
+defaults.
 
 ## Runtime verification
 
