@@ -193,14 +193,13 @@ def apply_plan(
     resolved_run_id = run_id or uuid4().hex
     executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
     resolver = PostgresTargetSetResolver(engine=database)
-    applied: list[AppliedStep] = []
     result = ApplyResult(
         run_id=resolved_run_id,
         dry_run=dry_run,
         plan_id=plan.plan_id,
         admission_id=admission.admission_id if admission else None,
-        steps=applied,
     )
+    applied = result.steps
     try:
         with database.begin() as connection:
             _set_controlled_transaction_mode(connection, dry_run=dry_run)

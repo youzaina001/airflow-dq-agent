@@ -34,7 +34,7 @@ dependencies = [
 airflow = [
   "apache-airflow==3.1.5",
   "apache-airflow-providers-common-ai[openai,mcp,sql]==0.8.0",
-  "apache-airflow-providers-standard==1.10.0",
+  "apache-airflow-providers-standard==1.12.1",
   "apache-airflow-providers-postgres==6.5.0",
   "apache-airflow-providers-common-sql==1.30.0",
 ]
