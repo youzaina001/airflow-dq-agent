@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.apply import apply_plan
-from airflow_dq_agent.contracts.models import HumanDecision
+from airflow_dq_agent.contracts.models import ExecutablePlanItem, HumanDecision
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
@@ -64,7 +64,9 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
     dry_run = apply_plan(
         plan, evaluation, admission, dry_run=True, engine=engine, run_id="integration-dry"
     )
-    assert any(step.estimated_rows == 5 for step in dry_run.steps)
+    assert sorted(step.estimated_rows for step in dry_run.steps) == sorted(
+        item.target_set.count for item in plan.items if isinstance(item, ExecutablePlanItem)
+    )
 
     applied = apply_plan(
         plan,

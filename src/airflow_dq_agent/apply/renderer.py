@@ -132,7 +132,7 @@ def _copy_sql(
     pk = _quote(contract.primary_key[0])
     return (
         "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
-        "SELECT :run_id, :table_name, jsonb_build_object(:pk_key, t."
+        "SELECT :run_id, :table_name, jsonb_build_object(CAST(:pk_key AS text), t."
         + pk
         + "), :reason, to_jsonb(t)\n"
         + f"FROM {table} t{join_clause}\nWHERE {where_clause}",
