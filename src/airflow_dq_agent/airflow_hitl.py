@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from airflow_dq_agent.contracts.models import AuditEvent
@@ -57,13 +58,14 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
         *,
         quality_run_id: str,
         predecessor_event_id: str,
-        approver_ids: set[str],
+        approver_ids: Collection[str],
         audit_dsn: str | None,
         **kwargs: Any,
     ) -> None:
         self.quality_run_id = quality_run_id
         self.predecessor_event_id = predecessor_event_id
-        self.approver_ids = approver_ids
+        # Keep custom-operator state DAG-serialization friendly; a set is not JSON data.
+        self.approver_ids = sorted(set(approver_ids))
         self.audit_dsn = audit_dsn
         super().__init__(**kwargs)
 
@@ -78,7 +80,7 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
 
         decision = audit_then_complete_approval(
             event,
-            approver_ids=self.approver_ids,
+            approver_ids=set(self.approver_ids),
             quality_run_id=self.quality_run_id,
             predecessor=self.predecessor_event_id,
             persist=persist,
