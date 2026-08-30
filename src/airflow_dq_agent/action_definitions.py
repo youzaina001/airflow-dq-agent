@@ -17,8 +17,6 @@ from pydantic import BaseModel, Field
 from airflow_dq_agent.contracts.models import (
     DestructiveRank,
     Dimension,
-    ExecutablePlanItem,
-    NonExecutablePlanItem,
 )
 from airflow_dq_agent.contracts.remediations import (
     RemediationAction,
@@ -109,7 +107,7 @@ def _single_pk(contract: TableContract) -> str:
     return contract.primary_key[0]
 
 
-def _validate_no_op(_: TableContract, __: dict[str, Any]) -> list[str]:
+def _validate_no_additional_rules(_: TableContract, __: dict[str, Any]) -> list[str]:
     return []
 
 
@@ -197,11 +195,11 @@ def _derive_null_fill(spec: CheckSpec, _: TableContract, params: dict[str, Any])
     }
 
 
-def _copy_sql(
-    contract: TableContract, where_clause: str, *, join_clause: str = ""
+def _quarantine_queries(
+    contract: TableContract, pk_column: str, where_clause: str, *, join_clause: str = ""
 ) -> tuple[str, str, str]:
     table = _qualified(contract)
-    pk = _quote(contract.primary_key[0])
+    pk = _quote(pk_column)
     return (
         "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
         "SELECT :run_id, :table_name, jsonb_build_object(CAST(:pk_key AS text), t."
@@ -221,11 +219,14 @@ def _quarantine_step(
     run_id: str,
     join_clause: str = "",
 ) -> RenderedStep:
-    sql, estimate_sql, target_sql = _copy_sql(contract, where_clause, join_clause=join_clause)
+    pk_column = _single_pk(contract)
+    sql, estimate_sql, target_sql = _quarantine_queries(
+        contract, pk_column, where_clause, join_clause=join_clause
+    )
     common = {
         "run_id": run_id,
         "table_name": contract.qualified,
-        "pk_key": contract.primary_key[0],
+        "pk_key": pk_column,
         "reason": action.action_id,
     }
     return RenderedStep(
@@ -342,7 +343,7 @@ def _render_null_fill(
     column = _quote(column_name)
     fill_value = _coerce_fill_value(contract, column_name, params["fill_value"])
     table = _qualified(contract)
-    pk = _quote(contract.primary_key[0])
+    pk = _quote(_single_pk(contract))
     return RenderedStep(
         action_id=action.action_id,
         table=contract.table,
@@ -365,7 +366,7 @@ def _governed_action(
     preview_sql: str,
     derive: DerivedParams,
     render: RenderAction,
-    validate: ValidateAction = _validate_no_op,
+    validate: ValidateAction = _validate_no_additional_rules,
     optional_params: list[str] | None = None,
     notes: str = "",
 ) -> GovernedAction:
@@ -529,14 +530,3 @@ def list_remediation_actions() -> tuple[RemediationAction, ...]:
 def is_governed_action(action_id: str) -> bool:
     """Return whether an action ID is registered for governed execution."""
     return action_id in _GOVERNED_ACTIONS
-
-
-def render_plan_item(
-    item: ExecutablePlanItem | NonExecutablePlanItem, *, run_id: str = "dry-run"
-) -> RenderedStep:
-    """Render one executable plan item from its governed action definition."""
-    if not isinstance(item, ExecutablePlanItem):
-        raise ValueError("Cannot render a non-executable remediation plan item")
-    return get_governed_action(item.action_id).render(
-        table=item.table, params=item.params, run_id=run_id
-    )

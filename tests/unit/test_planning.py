@@ -1,10 +1,7 @@
-import pytest
-
-from airflow_dq_agent.action_definitions import render_plan_item
+from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts import (
     CandidateAction,
     ExecutablePlanItem,
-    NonExecutablePlanItem,
     Proposal,
     QualityEvidence,
     TargetSet,
@@ -88,7 +85,7 @@ def test_compiler_blocks_catalogued_but_unreviewed_null_fill_without_target_look
     assert plan.blocked_reasons == ["candidate action is unavailable under the controlled policy"]
 
 
-def test_plan_renderer_accepts_only_executable_compiled_items() -> None:
+def test_governed_action_renders_an_executable_compiled_item() -> None:
     item = ExecutablePlanItem(
         item_id="candidate-0",
         action_id="quarantine_nulls",
@@ -104,7 +101,9 @@ def test_plan_renderer_accepts_only_executable_compiled_items() -> None:
         policy_fingerprint="policy:orders-null-v1",
     )
 
-    rendered = render_plan_item(item, run_id="test-run")
+    rendered = get_governed_action(item.action_id).render(
+        table=item.table, params=item.params, run_id="test-run"
+    )
 
     assert (
         rendered.target_sql
@@ -112,16 +111,3 @@ def test_plan_renderer_accepts_only_executable_compiled_items() -> None:
     )
     assert "FOR UPDATE" not in rendered.target_sql
     assert rendered.params["run_id"] == "test-run"
-    with pytest.raises(ValueError, match="non-executable"):
-        render_plan_item(
-            NonExecutablePlanItem(
-                item_id="omitted-failures",
-                evidence=[
-                    QualityEvidence(
-                        check_id="fact_orders.total_amount.completeness",
-                        contract_id="warehouse.fact_orders",
-                    )
-                ],
-                reason="candidate proposal omitted failed-check coverage",
-            )
-        )
