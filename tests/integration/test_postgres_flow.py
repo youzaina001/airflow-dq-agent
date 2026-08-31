@@ -16,6 +16,8 @@ from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite
+from airflow_dq_agent.traces import append_event, append_human_decision, candidate_proposal_event
+from airflow_dq_agent.traces.lineage import evaluation_event, plan_event
 from airflow_dq_agent.warehouse.db import make_engine
 from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.warehouse.seed import seed_warehouse
@@ -55,19 +57,34 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
 
     proposal = run_proposal_agent(report).proposal
     assert evaluate_proposal(report, proposal).passed
+    assert report.audit_event_id is not None
+    candidate_audit_event = candidate_proposal_event(report, proposal, report.audit_event_id)
+    append_event(candidate_audit_event)
     engine = make_engine(warehouse_dsn)
     plan = compile_remediation_plan(
         report, proposal, target_sets=PostgresTargetSetResolver(engine=engine)
     )
+    plan_audit_event = plan_event(plan, candidate_audit_event)
+    append_event(plan_audit_event)
     evaluation = evaluate_plan(plan)
     assert evaluation.passed
+    evaluation_audit_event = evaluation_event(plan, evaluation, plan_audit_event)
+    append_event(evaluation_audit_event)
+    decision = HumanDecision(
+        decision="Approve", actor="integration-test", note="Reviewed deterministic target sets."
+    )
+    with pytest.raises(PermissionError, match="human decision has no durable audit event"):
+        create_apply_admission(plan, evaluation, decision)
+
+    decision_audit_event = append_human_decision(report.run_id, evaluation_audit_event, decision)
+    audited_decision = decision.model_copy(update={"audit_event_id": decision_audit_event.event_id})
     admission = create_apply_admission(
         plan,
         evaluation,
-        HumanDecision(
-            decision="Approve", actor="integration-test", note="Reviewed deterministic target sets."
-        ),
+        audited_decision,
     )
+    assert decision_audit_event.predecessor_ids == [evaluation_audit_event.event_id]
+    assert admission.decision_event_id == decision_audit_event.event_id
     dry_run = apply_plan(
         plan, evaluation, admission, dry_run=True, engine=engine, run_id="integration-dry"
     )
