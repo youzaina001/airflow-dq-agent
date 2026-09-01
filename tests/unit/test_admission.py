@@ -58,6 +58,23 @@ def test_unaudited_human_decision_cannot_create_apply_admission() -> None:
         )
 
 
+@pytest.mark.parametrize("audit_event_id", ["", " ", "\t\n"])
+def test_blank_audit_event_id_cannot_create_apply_admission(audit_event_id: str) -> None:
+    plan, evaluation = _evaluated_plan()
+
+    with pytest.raises(PermissionError, match="human decision has no durable audit event"):
+        create_apply_admission(
+            plan,
+            evaluation,
+            HumanDecision(
+                decision="Approve",
+                actor="approver-1",
+                note="Reviewed target set.",
+                audit_event_id=audit_event_id,
+            ),
+        )
+
+
 def test_audited_approval_receives_time_bounded_apply_admission() -> None:
     plan, evaluation = _evaluated_plan()
     now = datetime(2026, 8, 30, tzinfo=UTC)

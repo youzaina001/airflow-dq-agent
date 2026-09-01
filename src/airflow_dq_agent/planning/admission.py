@@ -37,7 +37,8 @@ def create_apply_admission(
         raise PermissionError("Refusing admission: human decision is not an approval")
     if not decision.actor.strip() or not decision.note or not decision.note.strip():
         raise PermissionError("Refusing admission: approval requires an actor and non-empty note")
-    if not decision.audit_event_id:
+    audit_event_id = decision.audit_event_id
+    if not audit_event_id or not audit_event_id.strip():
         raise PermissionError("Refusing admission: human decision has no durable audit event")
     expires_at = issued_at + ttl
     fingerprint = canonical_fingerprint(
@@ -48,7 +49,7 @@ def create_apply_admission(
             "evaluation_id": evaluation.evaluation_id,
             "evaluation_fingerprint": evaluation.fingerprint,
             "decision_id": decision.decision_id,
-            "decision_event_id": decision.audit_event_id,
+            "decision_event_id": audit_event_id,
             "policy_fingerprint": plan.policy_fingerprint,
             "issued_at": issued_at,
             "expires_at": expires_at,
@@ -61,7 +62,7 @@ def create_apply_admission(
         evaluation_id=evaluation.evaluation_id,
         evaluation_fingerprint=evaluation.fingerprint,
         decision_id=decision.decision_id,
-        decision_event_id=decision.audit_event_id,
+        decision_event_id=audit_event_id,
         policy_fingerprint=plan.policy_fingerprint,
         issued_at=issued_at,
         expires_at=expires_at,
