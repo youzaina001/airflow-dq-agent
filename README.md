@@ -137,11 +137,14 @@ fingerprints, counts, and sanitized reasons—not prompts or row samples.
 ### Privacy boundaries
 
 Row samples exist only inside the quality process and in bounded, read-only proposer
-sampling. Three durable channels persist data, and none carries row samples:
+sampling. Raw live-model output remains transient in the proposal task: before that
+task returns, the proposal is reconstructed from canonical governed-action and
+report-scoped evidence identifiers with controlled narrative text. Three durable
+channels persist data, and none carries row samples or model-authored narrative:
 
 | Channel | Written by | Contents |
 | --- | --- | --- |
-| Airflow XCom | `run_suite_task` via `sample_free_report` | Sanitized report: run/report/audit lineage IDs, check IDs, contract IDs, dimension, status, counts, messages, predicates, and observed columns—never `sample_failures` |
+| Airflow XCom | `run_suite_task` via `sample_free_report`; `propose_task` via `safe_proposal_for_xcom` | Sanitized report fields and bounded proposal authority identifiers—never `sample_failures`, sampled values, or model-authored text |
 | JSONL traces | `JsonlAuditSink` | Minimized `AuditEvent` lineage bodies (IDs, fingerprints, counts, reasons) |
 | Postgres audit | `PostgresAuditSink` | The same `AuditEvent` bodies plus per-check `dq.check_runs` rows with counts only |
 

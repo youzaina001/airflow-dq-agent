@@ -8,6 +8,7 @@ value Airflow would store as that task's XCom payload.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from collections.abc import Callable
@@ -16,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from airflow_dq_agent.agent import AgentRun, run_proposal_agent
 from airflow_dq_agent.contracts.models import (
     EvalReport,
     ExecutablePlanItem,
@@ -23,7 +25,7 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.quality import run_quality_suite
+from airflow_dq_agent.quality import run_quality_suite, sample_free_report, seeded_failure_report
 from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.warehouse.seed import seed_warehouse
 
@@ -54,9 +56,13 @@ def _assert_payload_is_sample_free(node: object) -> None:
 
 
 @pytest.fixture()
-def dag_tasks(monkeypatch: pytest.MonkeyPatch, warehouse_dsn: str) -> dict[str, Callable[..., Any]]:
-    """Load dags/dq_daily.py against the throwaway warehouse with a stubbed airflow."""
-    monkeypatch.setenv("WAREHOUSE_DSN", warehouse_dsn)
+def dag_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[types.ModuleType, dict[str, Callable[..., Any]]]:
+    """Load dags/dq_daily.py with stubbed Airflow task registration."""
+    # Loading and directly exercising non-database task bodies must not require
+    # Docker. Tests that run the suite supply their own throwaway warehouse DSN.
+    monkeypatch.setenv("WAREHOUSE_DSN", "postgresql+psycopg://dq:dq@localhost:1/unused-warehouse")
     monkeypatch.delenv("READ_DSN", raising=False)
     monkeypatch.delenv("AUDIT_DSN", raising=False)
     monkeypatch.delenv("APPLY_DSN", raising=False)
@@ -109,13 +115,15 @@ def dag_tasks(monkeypatch: pytest.MonkeyPatch, warehouse_dsn: str) -> dict[str, 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert "run_suite_task" in tasks
-    return tasks
+    return module, tasks
 
 
 @pytest.mark.integration
 def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
-    dag_tasks: dict[str, Callable[..., Any]], warehouse_dsn: str
+    dag_runtime: tuple[types.ModuleType, dict[str, Callable[..., Any]]], warehouse_dsn: str
 ) -> None:
+    module, dag_tasks = dag_runtime
+    module.settings = module.settings.model_copy(update={"warehouse_dsn": warehouse_dsn})
     seed_warehouse(warehouse_dsn)
     direct = run_quality_suite(warehouse_dsn)
     failing = [check for check in direct.checks if check.failed]
@@ -123,7 +131,7 @@ def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
     assert any(check.sample_failures for check in failing)
 
     report_payload = dag_tasks["run_suite_task"]()
-    proposal_payload = dag_tasks["propose_stub_task"](report_payload)
+    proposal_payload = dag_tasks["propose_task"](report_payload)
     candidate_payload = dag_tasks["audit_candidate_task"](report_payload, proposal_payload)
     compiled_payload = dag_tasks["compile_plan_task"](report_payload, candidate_payload)
     evaluated_payload = dag_tasks["evaluate_plan_task"](compiled_payload)
@@ -162,3 +170,39 @@ def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
     evaluation = EvalReport.model_validate(evaluated_payload["evaluation"])
     assert evaluation.passed
     assert evaluated_payload["plan_event_id"] == compiled_payload["plan_event_id"]
+
+
+@pytest.mark.integration
+def test_live_proposer_echo_is_removed_before_task_returns_xcom(
+    dag_runtime: tuple[types.ModuleType, dict[str, Callable[..., Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, dag_tasks = dag_runtime
+    report = seeded_failure_report().model_copy(update={"audit_event_id": "audit-root-1"})
+    base = run_proposal_agent(report).proposal
+    echoed = base.model_copy(
+        update={
+            "proposal_id": "c101.invalid",
+            "fingerprint": "c101.invalid",
+            "summary": "c101.invalid",
+            "root_cause_hypothesis": "c101.invalid",
+            "candidate_actions": [
+                action.model_copy(update={"rationale": "c101.invalid"})
+                for action in base.candidate_actions
+            ],
+            "do_not_apply_reasons": ["c101.invalid"],
+        }
+    )
+    live_run = AgentRun(
+        proposal=echoed,
+        prompt="transient prompt",
+        tool_calls=[],
+        llm_mode="live",
+    )
+    monkeypatch.setattr(module, "run_proposal_agent", lambda _report: live_run)
+
+    proposal_payload = dag_tasks["propose_task"](sample_free_report(report))
+
+    assert "c101.invalid" not in json.dumps(proposal_payload)
+    _assert_payload_is_sample_free(proposal_payload)
+    assert Proposal.model_validate(proposal_payload).candidate_actions
