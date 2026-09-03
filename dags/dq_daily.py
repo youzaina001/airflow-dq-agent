@@ -8,8 +8,7 @@ from typing import Any
 from airflow.exceptions import AirflowSkipException
 from airflow.sdk import dag, task
 
-from airflow_dq_agent.agent import build_read_only_toolset, run_proposal_agent
-from airflow_dq_agent.agent.runner import build_prompt
+from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
 from airflow_dq_agent.airflow_hitl import AuditedApprovalOperator
 from airflow_dq_agent.apply import apply_plan
 from airflow_dq_agent.config import get_settings
@@ -25,13 +24,10 @@ from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
-from airflow_dq_agent.quality import run_quality_suite
+from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 from airflow_dq_agent.traces import append_event, candidate_proposal_event
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event
 from airflow_dq_agent.warehouse.db import make_engine
-
-# Kept at module scope for Airflow's Pydantic XCom serialization of @task.agent output.
-__all__ = ["Proposal"]
 
 settings = get_settings()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
@@ -49,30 +45,18 @@ if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
 def dq_daily() -> None:
     @task
     def run_suite_task() -> dict[str, Any]:
-        return run_quality_suite(settings.read_dsn or settings.warehouse_dsn).model_dump(
-            mode="json"
-        )
+        # XCom is durable storage, like JSONL and Postgres audit lineage. The
+        # report crosses this boundary sample-free: sample_failures never enters
+        # Airflow metadata, while IDs, counts, messages, and observed columns do.
+        return sample_free_report(run_quality_suite(settings.read_dsn or settings.warehouse_dsn))
 
     @task
-    def propose_stub_task(report_data: dict[str, Any]) -> dict[str, Any]:
+    def propose_task(report_data: dict[str, Any]) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
-        return run_proposal_agent(report).proposal.model_dump(mode="json")
-
-    # The live agent receives only catalog, fixed-sample, and observed-schema reads.
-    if settings.llm_mode == "live":
-
-        @task.agent(
-            llm_conn_id="pydanticai_default",
-            output_type=Proposal,
-            serialize_output=True,
-            toolsets=[build_read_only_toolset()],
-        )
-        def propose_live_task(report_data: dict[str, Any]) -> str:
-            return build_prompt(QualitySuiteReport.model_validate(report_data))
-
-        propose_task = propose_live_task
-    else:
-        propose_task = propose_stub_task
+        # The raw model result and any bounded tool samples remain transient inside
+        # this task. Only canonical authority identifiers and controlled text are
+        # reconstructed for the durable XCom return value.
+        return safe_proposal_for_xcom(report, run_proposal_agent(report).proposal)
 
     @task
     def audit_candidate_task(

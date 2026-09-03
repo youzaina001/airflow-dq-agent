@@ -134,6 +134,24 @@ candidate, plan, evaluation, decision, admission, and apply result. Postgres is 
 for HITL audit writes; JSONL is supplementary. Durable payloads contain IDs,
 fingerprints, counts, and sanitized reasons—not prompts or row samples.
 
+### Privacy boundaries
+
+Row samples exist only inside the quality process and in bounded, read-only proposer
+sampling. Raw live-model output remains transient in the proposal task: before that
+task returns, the proposal is reconstructed from canonical governed-action and
+report-scoped evidence identifiers with controlled narrative text. Three durable
+channels persist data, and none carries row samples or model-authored narrative:
+
+| Channel | Written by | Contents |
+| --- | --- | --- |
+| Airflow XCom | `run_suite_task` via `sample_free_report`; `propose_task` via `safe_proposal_for_xcom` | Sanitized report fields and bounded proposal authority identifiers—never `sample_failures`, sampled values, or model-authored text |
+| JSONL traces | `JsonlAuditSink` | Minimized `AuditEvent` lineage bodies (IDs, fingerprints, counts, reasons) |
+| Postgres audit | `PostgresAuditSink` | The same `AuditEvent` bodies plus per-check `dq.check_runs` rows with counts only |
+
+A DAG-level integration test (`tests/integration/test_dag_xcom_privacy.py`) executes the
+real `dq_daily` task bodies and asserts that no XCom payload contains `sample_failures`
+or seeded row values while proposal, compilation, and evaluation still pass.
+
 ## Repository layout
 
 ```text
