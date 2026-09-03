@@ -25,7 +25,7 @@ from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
-from airflow_dq_agent.quality import run_quality_suite
+from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 from airflow_dq_agent.traces import append_event, candidate_proposal_event
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event
 from airflow_dq_agent.warehouse.db import make_engine
@@ -49,9 +49,10 @@ if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
 def dq_daily() -> None:
     @task
     def run_suite_task() -> dict[str, Any]:
-        return run_quality_suite(settings.read_dsn or settings.warehouse_dsn).model_dump(
-            mode="json"
-        )
+        # XCom is durable storage, like JSONL and Postgres audit lineage. The
+        # report crosses this boundary sample-free: sample_failures never enters
+        # Airflow metadata, while IDs, counts, messages, and observed columns do.
+        return sample_free_report(run_quality_suite(settings.read_dsn or settings.warehouse_dsn))
 
     @task
     def propose_stub_task(report_data: dict[str, Any]) -> dict[str, Any]:
