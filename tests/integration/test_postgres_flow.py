@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.apply import apply_plan
-from airflow_dq_agent.contracts.models import ExecutablePlanItem, HumanDecision
+from airflow_dq_agent.contracts.models import CheckStatus, ExecutablePlanItem, HumanDecision
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
@@ -91,3 +91,25 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
         ).scalar_one()
     assert copied >= 5
     assert source_nulls == 5
+
+
+@pytest.mark.integration
+def test_run_quality_suite_reports_missing_warehouse_table(warehouse_dsn: str) -> None:
+    seed_warehouse(warehouse_dsn)
+    engine = make_engine(warehouse_dsn)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DROP TABLE warehouse.fact_orders"))
+        report = run_quality_suite(warehouse_dsn)
+    finally:
+        seed_warehouse(warehouse_dsn)
+
+    drift = report.get("fact_orders.schema_drift")
+    assert drift is not None
+    assert drift.status == CheckStatus.FAIL
+    assert "missing table fact_orders" in drift.message
+    completeness = report.get("fact_orders.total_amount.completeness")
+    assert completeness is not None
+    assert completeness.status == CheckStatus.ERROR
+    assert completeness.sample_failures == []
+    assert "missing table fact_orders" in completeness.message
