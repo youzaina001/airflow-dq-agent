@@ -30,6 +30,7 @@ from airflow_dq_agent.planning.integrity import (
     verify_evaluation_integrity,
     verify_executable_params,
     verify_plan_integrity,
+    verify_report_integrity,
 )
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.traces.lineage import apply_result_event
@@ -66,6 +67,7 @@ def _require_plan_admission(
         raise PermissionError("Refusing apply: remediation plan is blocked")
     if not evaluation.passed:
         raise PermissionError("Refusing apply: remediation-plan evaluation did not pass")
+    verify_report_integrity(report, refusing="apply")
     verify_plan_integrity(plan, refusing="apply")
     verify_evaluation_integrity(plan, evaluation, refusing="apply")
     verify_admission_integrity(plan, evaluation, admission, refusing="apply")
@@ -84,6 +86,7 @@ def _require_dry_run(
         raise PermissionError("Refusing dry run: remediation plan is blocked")
     if not evaluation.passed:
         raise PermissionError("Refusing dry run: remediation-plan evaluation did not pass")
+    verify_report_integrity(report, refusing="dry run")
     verify_plan_integrity(plan, refusing="dry run")
     verify_evaluation_integrity(plan, evaluation, refusing="dry run")
     if current_policy_fingerprint(plan) != plan.policy_fingerprint:

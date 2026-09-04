@@ -5,10 +5,14 @@ import pytest
 from pydantic import ValidationError
 
 from airflow_dq_agent.apply.executor import apply_plan
-from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
+from airflow_dq_agent.contracts.fingerprints import (
+    canonical_fingerprint,
+    report_payload_fingerprint,
+)
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     CandidateAction,
+    CheckResult,
     EvalReport,
     ExecutablePlanItem,
     HumanDecision,
@@ -27,6 +31,7 @@ from airflow_dq_agent.planning.integrity import (
     plan_payload_fingerprint,
 )
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
+from airflow_dq_agent.traces.lineage import quality_report_event
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 
@@ -97,10 +102,9 @@ def _decision() -> HumanDecision:
     )
 
 
-def _compile_evaluated(
-    *check_actions: tuple[str, str],
+def _compile_evaluated_from(
+    report: QualitySuiteReport, *check_actions: tuple[str, str]
 ) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
-    report = seeded_failure_report()
     checks = []
     actions = []
     for check_id, action_id in check_actions:
@@ -117,6 +121,7 @@ def _compile_evaluated(
             )
         )
     scoped = report.model_copy(update={"checks": checks})
+    scoped = scoped.model_copy(update={"fingerprint": report_payload_fingerprint(scoped)})
     plan = compile_remediation_plan(
         scoped,
         Proposal(
@@ -130,6 +135,12 @@ def _compile_evaluated(
     evaluation = evaluate_plan(plan)
     assert evaluation.passed
     return plan, evaluation, scoped
+
+
+def _compile_evaluated(
+    *check_actions: tuple[str, str],
+) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
+    return _compile_evaluated_from(seeded_failure_report(), *check_actions)
 
 
 def _first_item(plan: RemediationPlan) -> ExecutablePlanItem:
@@ -205,6 +216,48 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
     _assert_refusal_is_safe(applied.value)
     rendered = " ".join(engine.transaction.connection.statements)
     assert 't."status" IS NULL' not in rendered
+
+
+def test_admission_and_apply_refuse_consistent_plan_and_report_forgery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    _plan, _evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls"),
+        ("fact_orders.status.validity", "quarantine_invalids"),
+    )
+    stored = report.fingerprint
+    assert stored
+
+    surviving = report.get("fact_orders.total_amount.completeness")
+    assert surviving is not None
+    forged_report = report.model_copy(update={"checks": [surviving], "fingerprint": stored})
+    forged_plan, forged_evaluation, _ = _compile_evaluated_from(
+        forged_report, ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+
+    with pytest.raises(PermissionError, match="quality report fingerprint") as admitted:
+        create_apply_admission(
+            forged_plan, forged_evaluation, _decision(), now=NOW, report=forged_report
+        )
+    _assert_refusal_is_safe(admitted.value)
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine()
+    with pytest.raises(PermissionError, match="quality report fingerprint") as applied:
+        apply_plan(
+            forged_plan,
+            forged_evaluation,
+            report=forged_report,
+            dry_run=True,
+            engine=engine,  # type: ignore[arg-type]
+            now=NOW,
+        )
+    _assert_refusal_is_safe(applied.value)
+    assert 't."status" IS NULL' not in " ".join(engine.transaction.connection.statements)
 
 
 def test_admission_and_apply_refuse_rehashed_plan_retargeting_catalogued_check(
@@ -479,26 +532,6 @@ def test_apply_refuses_decision_link_and_expiry_tampers(
         assert 't."status" IS NULL' not in " ".join(engine.transaction.connection.statements)
 
 
-def test_plan_evaluation_and_admission_reject_unexpected_fields() -> None:
-    plan, evaluation, report = _compile_evaluated(
-        ("fact_orders.total_amount.completeness", "quarantine_nulls")
-    )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
-    for model, payload in (
-        (RemediationPlan, plan.model_dump(mode="json")),
-        (EvalReport, evaluation.model_dump(mode="json")),
-        (ApplyAdmission, admission.model_dump(mode="json")),
-        (
-            Proposal,
-            Proposal(summary="s", root_cause_hypothesis="h", confidence=0.1).model_dump(
-                mode="json"
-            ),
-        ),
-    ):
-        with pytest.raises(ValidationError):
-            model.model_validate({**payload, "unexpected_authority": "forged"})
-
-
 def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
@@ -537,3 +570,27 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
             "items": [item.model_dump(mode="json") for item in plan.items],
         }
     )
+    assert report.fingerprint == report_payload_fingerprint(report)
+    assert quality_report_event(report).report_fingerprint == report.fingerprint
+
+
+def test_governed_artifacts_reject_unexpected_fields() -> None:
+    plan, evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    for model, payload in (
+        (RemediationPlan, plan.model_dump(mode="json")),
+        (EvalReport, evaluation.model_dump(mode="json")),
+        (ApplyAdmission, admission.model_dump(mode="json")),
+        (QualitySuiteReport, report.model_dump(mode="json")),
+        (CheckResult, report.checks[0].model_dump(mode="json")),
+        (
+            Proposal,
+            Proposal(summary="s", root_cause_hypothesis="h", confidence=0.1).model_dump(
+                mode="json"
+            ),
+        ),
+    ):
+        with pytest.raises(ValidationError):
+            model.model_validate({**payload, "unexpected_authority": "forged"})

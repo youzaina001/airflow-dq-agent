@@ -6,6 +6,7 @@ import pytest
 import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode, apply_plan
+from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
     HumanDecision,
@@ -103,6 +104,9 @@ def test_dry_run_retains_applied_steps_on_the_result(
     failed = report.get("fact_orders.total_amount.completeness")
     assert failed is not None
     scoped_report = report.model_copy(update={"checks": [failed]})
+    scoped_report = scoped_report.model_copy(
+        update={"fingerprint": report_payload_fingerprint(scoped_report)}
+    )
     candidate = Proposal(
         summary="Quarantine rows with missing totals.",
         root_cause_hypothesis="The source omitted a required value.",
@@ -158,6 +162,9 @@ def test_apply_uses_each_governed_action_mutation_capability(
     failed = report.get(check_id)
     assert failed is not None
     scoped_report = report.model_copy(update={"checks": [failed]})
+    scoped_report = scoped_report.model_copy(
+        update={"fingerprint": report_payload_fingerprint(scoped_report)}
+    )
     plan = compile_remediation_plan(
         scoped_report,
         Proposal(

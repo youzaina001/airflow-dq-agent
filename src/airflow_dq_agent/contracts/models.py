@@ -64,6 +64,8 @@ FORBIDDEN_SQL_TOKENS = (
 
 
 class CheckResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     check_id: str
     table: str
     column: str | None = None
@@ -82,6 +84,8 @@ class CheckResult(BaseModel):
 
 
 class QualitySuiteReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     report_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
