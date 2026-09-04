@@ -110,14 +110,54 @@ def _message(spec: CheckSpec, failed: pl.DataFrame, n_total: int) -> str:
     return spec.description
 
 
+def _needed_columns(spec: CheckSpec) -> list[str]:
+    names: list[str] = []
+    if spec.column:
+        names.append(spec.column)
+    if spec.business_key:
+        names.extend(spec.business_key)
+    if spec.window_start_column:
+        names.append(spec.window_start_column)
+    if spec.window_end_column:
+        names.append(spec.window_end_column)
+    return names
+
+
+def _unevaluable_message(spec: CheckSpec, frames: Mapping[str, pl.DataFrame]) -> str:
+    # Missing structure must not abort the suite or leak row samples.
+    if spec.table not in frames:
+        text = f"cannot evaluate {spec.check_id}: missing table {spec.table}"
+    else:
+        observed = set(frames[spec.table].columns)
+        missing = next((name for name in _needed_columns(spec) if name not in observed), None)
+        if missing:
+            text = f"cannot evaluate {spec.check_id}: missing column {missing} on {spec.table}"
+        else:
+            text = f"cannot evaluate {spec.check_id}: required table or column is missing"
+    return text[:200]
+
+
 def run_suite_on_frames(frames: Mapping[str, pl.DataFrame]) -> QualitySuiteReport:
     checks: list[CheckResult] = []
     for spec in CHECK_SPECS.values():
-        failed = _jsonable(spec.failed_rows(frames))
-        n_total = _n_total(spec, frames)
-        checks.append(
-            _result(spec, failed=failed, n_total=n_total, message=_message(spec, failed, n_total))
-        )
+        try:
+            failed = _jsonable(spec.failed_rows(frames))
+            n_total = _n_total(spec, frames)
+            checks.append(
+                _result(
+                    spec, failed=failed, n_total=n_total, message=_message(spec, failed, n_total)
+                )
+            )
+        except (KeyError, pl.exceptions.ColumnNotFoundError):
+            checks.append(
+                _result(
+                    spec,
+                    failed=[],
+                    n_total=0,
+                    message=_unevaluable_message(spec, frames),
+                    status=CheckStatus.ERROR,
+                )
+            )
     return QualitySuiteReport(
         run_id=uuid4().hex,
         checks=checks,
