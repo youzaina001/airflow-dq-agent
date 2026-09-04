@@ -127,6 +127,7 @@ def test_dry_run_retains_applied_steps_on_the_result(
     result = apply_plan(
         plan,
         evaluation,
+        report=scoped_report,
         dry_run=True,
         engine=_RecordingEngine(),  # type: ignore[arg-type]
         run_id="unit-dry-run",
@@ -185,6 +186,7 @@ def test_apply_uses_each_governed_action_mutation_capability(
             note="Reviewed target set.",
             audit_event_id="decision-event-1",
         ),
+        report=scoped_report,
         now=now,
     )
     engine = _MutationRecordingEngine()
@@ -197,6 +199,7 @@ def test_apply_uses_each_governed_action_mutation_capability(
         plan,
         evaluation,
         admission,
+        report=scoped_report,
         dry_run=False,
         engine=engine,  # type: ignore[arg-type]
         now=now,

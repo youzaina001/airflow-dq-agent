@@ -47,7 +47,7 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
         decision="Approve", actor="integration-test", note="Reviewed deterministic target sets."
     )
     with pytest.raises(PermissionError, match="human decision has no durable audit event"):
-        create_apply_admission(plan, evaluation, decision)
+        create_apply_admission(plan, evaluation, decision, report=report)
 
     decision_audit_event = append_human_decision(report.run_id, evaluation_audit_event, decision)
     audited_decision = decision.model_copy(update={"audit_event_id": decision_audit_event.event_id})
@@ -55,11 +55,18 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
         plan,
         evaluation,
         audited_decision,
+        report=report,
     )
     assert decision_audit_event.predecessor_ids == [evaluation_audit_event.event_id]
     assert admission.decision_event_id == decision_audit_event.event_id
     dry_run = apply_plan(
-        plan, evaluation, admission, dry_run=True, engine=engine, run_id="integration-dry"
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=True,
+        engine=engine,
+        run_id="integration-dry",
     )
     assert sorted(step.estimated_rows for step in dry_run.steps) == sorted(
         item.target_set.count for item in plan.items if isinstance(item, ExecutablePlanItem)
@@ -69,6 +76,7 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
         plan,
         evaluation,
         admission,
+        report=report,
         dry_run=False,
         engine=engine,
         run_id="integration-apply",

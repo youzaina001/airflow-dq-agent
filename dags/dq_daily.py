@@ -128,21 +128,31 @@ def dq_daily() -> None:
 
         @task
         def admit_apply_task(
-            evaluation_data: dict[str, Any], decision_data: dict[str, Any]
+            report_data: dict[str, Any],
+            evaluation_data: dict[str, Any],
+            decision_data: dict[str, Any],
         ) -> dict[str, Any]:
+            report = QualitySuiteReport.model_validate(report_data)
             plan = RemediationPlan.model_validate(evaluation_data["plan"])
             evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
             parsed_decision = HumanDecision.model_validate(decision_data)
             if parsed_decision.decision != "Approve":
                 raise AirflowSkipException("HITL did not approve this remediation plan")
             return create_apply_admission(
-                plan, evaluation, parsed_decision, ttl=settings.apply_admission_ttl
+                plan,
+                evaluation,
+                parsed_decision,
+                report=report,
+                ttl=settings.apply_admission_ttl,
             ).model_dump(mode="json")
 
         @task
         def apply_after_admission_task(
-            evaluation_data: dict[str, Any], admission_data: dict[str, Any]
+            report_data: dict[str, Any],
+            evaluation_data: dict[str, Any],
+            admission_data: dict[str, Any],
         ) -> dict[str, Any]:
+            report = QualitySuiteReport.model_validate(report_data)
             plan = RemediationPlan.model_validate(evaluation_data["plan"])
             evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
             admission = ApplyAdmission.model_validate(admission_data)
@@ -150,6 +160,7 @@ def dq_daily() -> None:
                 plan,
                 evaluation,
                 admission,
+                report=report,
                 dry_run=False,
                 engine=make_engine(settings.apply_dsn or settings.warehouse_dsn),
             )
@@ -179,8 +190,8 @@ def dq_daily() -> None:
             response_timeout=timedelta(hours=24),
         )
         approval_gate >> approval
-        admission = admit_apply_task(evaluated, approval.output)
-        apply_after_admission_task(evaluated, admission)
+        admission = admit_apply_task(report, evaluated, approval.output)
+        apply_after_admission_task(report, evaluated, admission)
 
 
 dq_daily()
