@@ -207,6 +207,8 @@ def _validity_rows(spec: CheckView, df: pl.DataFrame) -> pl.DataFrame:
 
 def _schema_drift_rows(spec: CheckView, frames: Mapping[str, pl.DataFrame]) -> pl.DataFrame:
     expected = set(get_table_contract(spec.table).column_names)
+    if spec.table not in frames:
+        return pl.DataFrame({"kind": ["missing_table"], "column": [spec.table]})
     observed = set(frames[spec.table].columns)
     extra = sorted(observed - expected)
     missing = sorted(expected - observed)
