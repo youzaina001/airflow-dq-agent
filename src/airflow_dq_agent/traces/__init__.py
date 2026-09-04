@@ -1,6 +1,10 @@
 """Append-only local and optional Postgres audit traces."""
 
-from airflow_dq_agent.traces.lineage import candidate_proposal_event, quality_report_event
+from airflow_dq_agent.traces.lineage import (
+    candidate_proposal_event,
+    quality_report_event,
+    review_event,
+)
 from airflow_dq_agent.traces.repository import (
     InMemoryAuditRepository,
     PostgresAuditRepository,
@@ -20,5 +24,6 @@ __all__ = [
     "candidate_proposal_event",
     "quality_report_event",
     "record_quality_report",
+    "review_event",
     "trace_agent_run",
 ]

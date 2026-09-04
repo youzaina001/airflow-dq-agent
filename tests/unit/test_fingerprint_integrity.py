@@ -40,7 +40,7 @@ from airflow_dq_agent.planning.integrity import (
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces import InMemoryAuditRepository
-from airflow_dq_agent.traces.lineage import decision_event, quality_report_event
+from airflow_dq_agent.traces.lineage import decision_event, quality_report_event, review_event
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 
@@ -118,22 +118,25 @@ def _approval(
     plan: RemediationPlan, evaluation: EvalReport
 ) -> tuple[HumanDecision, InMemoryAuditRepository]:
     review = build_approval_review(plan, evaluation, ttl=timedelta(hours=24))
+    shown = review_event(review, evaluation, "evaluation-event-1")
     decision = HumanDecision(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
-        fingerprint=review.fingerprint,
+        review_fingerprint=review.fingerprint,
     )
     event = decision_event(
         plan.quality_run_id,
         decision,
-        "evaluation-event-1",
+        shown,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
     )
     return (
         decision.model_copy(update={"audit_event_id": event.event_id}),
-        InMemoryAuditRepository([event]),
+        InMemoryAuditRepository([shown, event]),
     )
 
 

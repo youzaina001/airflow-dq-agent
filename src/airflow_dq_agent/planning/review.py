@@ -60,12 +60,16 @@ def build_approval_review(
         )
         for score in evaluation.scores
     ]
+    if not evaluation.fingerprint:
+        raise ValueError("evaluation has no immutable fingerprint")
     payload = {
         "plan_id": plan.plan_id,
         "plan_fingerprint": plan.fingerprint,
         "policy_fingerprint": plan.policy_fingerprint,
         "quality_run_id": plan.quality_run_id,
         "items": [item.model_dump(mode="json") for item in items],
+        "evaluation_id": evaluation.evaluation_id,
+        "evaluation_fingerprint": evaluation.fingerprint,
         "evaluation_passed": evaluation.passed,
         "evaluation_scores": [score.model_dump(mode="json") for score in scores],
         "admission_ttl_hours": ttl_hours,
@@ -84,6 +88,8 @@ def render_approval_review_body(review: ApprovalReview) -> str:
         f"Review fingerprint: {review.fingerprint}",
         "",
         f"Evaluation: {'passed' if review.evaluation_passed else 'failed'}",
+        f"Evaluation id: {review.evaluation_id}",
+        f"Evaluation fingerprint: {review.evaluation_fingerprint}",
     ]
     for score in review.evaluation_scores:
         status = "passed" if score.passed else "failed"

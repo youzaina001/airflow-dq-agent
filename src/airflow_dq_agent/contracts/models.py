@@ -342,6 +342,8 @@ class ApprovalReview(BaseModel):
     policy_fingerprint: str = Field(min_length=1)
     quality_run_id: str = Field(min_length=1)
     items: list[ApprovalReviewItem]
+    evaluation_id: str = Field(min_length=1)
+    evaluation_fingerprint: str = Field(min_length=1)
     evaluation_passed: bool
     evaluation_scores: list[ApprovalReviewScore]
     admission_ttl_hours: float = Field(gt=0)
@@ -354,6 +356,7 @@ class HumanDecision(BaseModel):
 
     decision_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
+    review_fingerprint: str | None = None
     audit_event_id: str | None = None
     decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     decision: Literal["Approve", "Reject", "Timeout", "shadow_skip"]
@@ -380,6 +383,7 @@ class AuditEvent(BaseModel):
         "plan_compiled",
         "plan_blocked",
         "evaluation",
+        "approval_review",
         "human_approved",
         "human_rejected",
         "human_timed_out",
@@ -401,6 +405,8 @@ class AuditEvent(BaseModel):
     target_set_fingerprint: str | None = None
     evaluation_id: str | None = None
     evaluation_fingerprint: str | None = None
+    review_fingerprint: str | None = None
+    review_payload: dict[str, Any] | None = None
     decision_id: str | None = None
     decision_fingerprint: str | None = None
     decision_outcome: str | None = None

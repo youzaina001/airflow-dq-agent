@@ -57,6 +57,8 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
                 "plan_id",
                 "plan_fingerprint",
                 "review_fingerprint",
+                "evaluation_id",
+                "evaluation_fingerprint",
             )
         )
     )
@@ -71,6 +73,8 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
         plan_id: str = "",
         plan_fingerprint: str = "",
         review_fingerprint: str = "",
+        evaluation_id: str = "",
+        evaluation_fingerprint: str = "",
         **kwargs: Any,
     ) -> None:
         self.quality_run_id = quality_run_id
@@ -81,6 +85,8 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
         self.plan_id = plan_id
         self.plan_fingerprint = plan_fingerprint
         self.review_fingerprint = review_fingerprint
+        self.evaluation_id = evaluation_id
+        self.evaluation_fingerprint = evaluation_fingerprint
         super().__init__(**kwargs)
 
     def execute_complete(self, context: dict[str, Any], event: dict[str, Any]) -> Any:
@@ -104,5 +110,7 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
             plan_id=self.plan_id,
             plan_fingerprint=self.plan_fingerprint,
             review_fingerprint=self.review_fingerprint,
+            evaluation_id=self.evaluation_id,
+            evaluation_fingerprint=self.evaluation_fingerprint,
         )
         return decision.model_dump(mode="json")
