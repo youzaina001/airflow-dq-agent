@@ -64,7 +64,7 @@ FORBIDDEN_SQL_TOKENS = (
 
 
 class CheckResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     check_id: str
     table: str
@@ -84,7 +84,7 @@ class CheckResult(BaseModel):
 
 
 class QualitySuiteReport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     report_id: str = Field(default_factory=lambda: uuid4().hex)
@@ -124,6 +124,8 @@ class QualitySuiteReport(BaseModel):
 class Citation(BaseModel):
     """A proposal must point at a real check + contract, not a vibe."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     check_id: str
     contract_id: str
     evidence: str = Field(min_length=1)
@@ -131,6 +133,8 @@ class Citation(BaseModel):
 
 class RemediationStep(BaseModel):
     """One allow-listed action. `sql_preview` is for humans; apply re-renders from action_id."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_id: str
     table: str
@@ -156,7 +160,7 @@ class RemediationStep(BaseModel):
 class QualityEvidence(BaseModel):
     """A failed-check reference scoped by the remediation plan's quality run."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     check_id: str = Field(min_length=1)
     contract_id: str = Field(min_length=1)
@@ -165,7 +169,7 @@ class QualityEvidence(BaseModel):
 class CandidateAction(BaseModel):
     """An untrusted request for one action; it has no SQL parameters or authority."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_id: str = Field(min_length=1)
     evidence: list[QualityEvidence] = Field(min_length=1)
@@ -175,14 +179,14 @@ class CandidateAction(BaseModel):
 class TargetSet(BaseModel):
     """Durable summary of a controlled target set; never carries its raw keys."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     count: int = Field(ge=0)
     fingerprint: str = Field(min_length=1)
 
 
 class ExecutablePlanItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["executable"] = "executable"
     item_id: str = Field(min_length=1)
@@ -195,7 +199,7 @@ class ExecutablePlanItem(BaseModel):
 
 
 class NonExecutablePlanItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["non_executable"] = "non_executable"
     item_id: str = Field(min_length=1)
@@ -212,7 +216,7 @@ PlanItem = Annotated[
 class RemediationPlan(BaseModel):
     """A deterministic, complete collection of executable or blocked plan items."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     plan_id: str = Field(default_factory=lambda: uuid4().hex)
     quality_run_id: str = Field(min_length=1)
@@ -228,7 +232,7 @@ class RemediationPlan(BaseModel):
 class ApplyAdmission(BaseModel):
     """A time-bounded authorization for exactly one evaluated remediation plan."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     admission_id: str = Field(default_factory=lambda: uuid4().hex)
     quality_run_id: str = Field(min_length=1)
@@ -247,7 +251,7 @@ class ApplyAdmission(BaseModel):
 class Proposal(BaseModel):
     """Untrusted typed candidate output. Compilation grants no candidate authority."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     proposal_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
@@ -259,7 +263,7 @@ class Proposal(BaseModel):
 
 
 class EvalScore(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     score: float = Field(ge=0.0, le=1.0)
@@ -269,7 +273,7 @@ class EvalScore(BaseModel):
 
 
 class EvalReport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     evaluation_id: str = Field(default_factory=lambda: uuid4().hex)
     audit_event_id: str | None = None
@@ -292,7 +296,7 @@ class EvalReport(BaseModel):
 
 
 class HumanDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
@@ -312,6 +316,8 @@ class ToolCallRecord(BaseModel):
 
 class AuditEvent(BaseModel):
     """A minimized immutable lineage event safe to persist in JSONL or Postgres."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     event_id: str = Field(default_factory=lambda: uuid4().hex)
     kind: Literal[
@@ -336,6 +342,7 @@ class AuditEvent(BaseModel):
     candidate_fingerprint: str | None = None
     plan_id: str | None = None
     plan_fingerprint: str | None = None
+    policy_fingerprint: str | None = None
     evaluation_id: str | None = None
     evaluation_fingerprint: str | None = None
     decision_id: str | None = None

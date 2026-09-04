@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from airflow_dq_agent.agent import AgentRun, run_proposal_agent
+from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import (
     EvalReport,
     ExecutablePlanItem,
@@ -178,7 +179,10 @@ def test_live_proposer_echo_is_removed_before_task_returns_xcom(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module, dag_tasks = dag_runtime
-    report = seeded_failure_report().model_copy(update={"audit_event_id": "audit-root-1"})
+    base = seeded_failure_report()
+    report = base.model_copy(
+        update={"audit_event_id": "audit-root-1", "fingerprint": report_payload_fingerprint(base)}
+    )
     base = run_proposal_agent(report).proposal
     echoed = base.model_copy(
         update={

@@ -214,11 +214,10 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
             run_id="unit-tamper",
         )
     _assert_refusal_is_safe(applied.value)
-    rendered = " ".join(engine.transaction.connection.statements)
-    assert 't."status" IS NULL' not in rendered
+    assert not engine.transaction.connection.statements
 
 
-def test_admission_and_apply_refuse_consistent_plan_and_report_forgery(
+def test_admission_and_apply_refuse_report_payload_tamper_in_consistent_plan_forgery(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
     _plan, _evaluation, report = _compile_evaluated(
@@ -257,7 +256,7 @@ def test_admission_and_apply_refuse_consistent_plan_and_report_forgery(
             now=NOW,
         )
     _assert_refusal_is_safe(applied.value)
-    assert 't."status" IS NULL' not in " ".join(engine.transaction.connection.statements)
+    assert not engine.transaction.connection.statements
 
 
 def test_admission_and_apply_refuse_rehashed_plan_retargeting_catalogued_check(

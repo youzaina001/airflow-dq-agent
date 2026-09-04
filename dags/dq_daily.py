@@ -23,6 +23,7 @@ from airflow_dq_agent.contracts import (
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
+from airflow_dq_agent.planning.integrity import verify_report_integrity
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 from airflow_dq_agent.traces import append_event, candidate_proposal_event
@@ -53,6 +54,7 @@ def dq_daily() -> None:
     @task
     def propose_task(report_data: dict[str, Any]) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
+        verify_report_integrity(report, refusing="proposal")
         # The raw model result and any bounded tool samples remain transient inside
         # this task. Only canonical authority identifiers and controlled text are
         # reconstructed for the durable XCom return value.
@@ -64,6 +66,7 @@ def dq_daily() -> None:
     ) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
         proposal = Proposal.model_validate(proposal_data)
+        verify_report_integrity(report, refusing="candidate audit")
         if report.audit_event_id is None:
             raise RuntimeError("quality report has no persisted audit root")
         event = candidate_proposal_event(report, proposal, report.audit_event_id)
@@ -82,6 +85,7 @@ def dq_daily() -> None:
         report = QualitySuiteReport.model_validate(report_data)
         proposal = Proposal.model_validate(candidate_data["proposal"])
         candidate_evaluation = EvalReport.model_validate(candidate_data["candidate_evaluation"])
+        verify_report_integrity(report, refusing="plan compilation")
         if not candidate_evaluation.passed:
             raise AirflowSkipException("Candidate Proposal evaluation failed")
         plan = compile_remediation_plan(
