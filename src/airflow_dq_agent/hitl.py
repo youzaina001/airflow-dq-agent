@@ -72,6 +72,9 @@ def audit_approval_decision(
     quality_run_id: str,
     predecessor: AuditEvent | str,
     persist: Callable[[AuditEvent], None],
+    plan_id: str | None = None,
+    plan_fingerprint: str | None = None,
+    review_fingerprint: str | None = None,
 ) -> HumanDecision:
     """Persist a parsed decision before returning it to any downstream admission path."""
     decision = parse_approval_output(output, approver_ids=approver_ids)
@@ -86,7 +89,15 @@ def audit_approval_decision(
             )
         }
     )
-    event = decision_event(quality_run_id, decision, predecessor)
+    if review_fingerprint and review_fingerprint.strip():
+        decision = decision.model_copy(update={"fingerprint": review_fingerprint})
+    event = decision_event(
+        quality_run_id,
+        decision,
+        predecessor,
+        plan_id=plan_id,
+        plan_fingerprint=plan_fingerprint,
+    )
     persist(event)
     return decision.model_copy(update={"audit_event_id": event.event_id})
 
@@ -99,6 +110,9 @@ def audit_then_complete_approval(
     predecessor: AuditEvent | str,
     persist: Callable[[AuditEvent], None],
     complete_provider: Callable[[], object],
+    plan_id: str | None = None,
+    plan_fingerprint: str | None = None,
+    review_fingerprint: str | None = None,
 ) -> HumanDecision:
     """Durably audit the outcome before the provider can branch or skip tasks."""
     decision = audit_approval_decision(
@@ -107,6 +121,9 @@ def audit_then_complete_approval(
         quality_run_id=quality_run_id,
         predecessor=predecessor,
         persist=persist,
+        plan_id=plan_id,
+        plan_fingerprint=plan_fingerprint,
+        review_fingerprint=review_fingerprint,
     )
     complete_provider()
     return decision
