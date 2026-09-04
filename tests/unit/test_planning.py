@@ -6,6 +6,7 @@ from airflow_dq_agent.contracts import (
     QualityEvidence,
     TargetSet,
 )
+from airflow_dq_agent.contracts.models import CheckStatus
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 
@@ -111,3 +112,36 @@ def test_governed_action_renders_an_executable_compiled_item() -> None:
     )
     assert "FOR UPDATE" not in rendered.target_sql
     assert rendered.params["run_id"] == "test-run"
+
+
+def test_compiler_does_not_treat_error_status_as_executable_evidence() -> None:
+    report = seeded_failure_report()
+    errored = report.get("fact_orders.total_amount.completeness")
+    assert errored is not None
+    errored = errored.model_copy(
+        update={"status": CheckStatus.ERROR, "n_failed": 0, "sample_failures": []}
+    )
+    assert not errored.failed
+    scoped_report = report.model_copy(update={"checks": [errored]})
+    assert scoped_report.failed_count == 0
+
+    candidate = Proposal(
+        summary="Quarantine rows for a check that could not be evaluated.",
+        root_cause_hypothesis="ERROR is not failed-check Quality Evidence.",
+        candidate_actions=[
+            CandidateAction(
+                action_id="quarantine_nulls",
+                evidence=[
+                    QualityEvidence(check_id=errored.check_id, contract_id=errored.contract_id)
+                ],
+                rationale="This check never produced failed-row evidence.",
+            )
+        ],
+        confidence=0.1,
+    )
+
+    plan = compile_remediation_plan(scoped_report, candidate, target_sets=_TargetSets())
+
+    assert plan.blocked is True
+    assert plan.items[0].kind == "non_executable"
+    assert not any(item.kind == "executable" for item in plan.items)
