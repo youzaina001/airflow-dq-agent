@@ -35,15 +35,28 @@ class _TargetSets:
         return TargetSet(count=5, fingerprint="targets:orders-null-v1")
 
 
-class _MatchingTargetResolver:
+def _target_set_from_received_params(params: dict[str, object]) -> TargetSet:
+    column = str(params.get("column", "unknown"))
+    return TargetSet(count=len(column), fingerprint=f"targets:from-params:{column}")
+
+
+class _ParamsDerivedTargetResolver:
+    """Re-resolve from received params so echoing item.target_set cannot hide F1."""
+
     def __init__(self, **_: object) -> None:
         pass
 
+    def _resolve(self, item: object) -> TargetSet:
+        params = getattr(item, "params", {})
+        if not isinstance(params, dict):
+            params = {}
+        return _target_set_from_received_params(params)
+
     def resolve_item(self, _: object, item: object) -> TargetSet:
-        return item.target_set  # type: ignore[union-attr]
+        return self._resolve(item)
 
     def lock_and_resolve(self, _: object, item: object) -> TargetSet:
-        return item.target_set  # type: ignore[union-attr]
+        return self._resolve(item)
 
 
 class _RecordingConnection:
@@ -135,6 +148,18 @@ def _assert_refusal_is_safe(exc: BaseException) -> None:
     assert "secret" not in lowered
 
 
+def test_evaluate_plan_refuses_mismatched_plan_fingerprint() -> None:
+    plan, _evaluation = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    item = _first_item(plan)
+    tampered = _replace_first_item(plan, params={**item.params, "column": "status"})
+    assert tampered.fingerprint == plan.fingerprint
+    with pytest.raises(PermissionError, match="received payload") as refused:
+        evaluate_plan(tampered)
+    _assert_refusal_is_safe(refused.value)
+
+
 def test_admission_and_apply_refuse_column_and_target_set_tamper(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
@@ -143,10 +168,11 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
     )
     admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
     item = _first_item(plan)
+    tampered_params = {**item.params, "column": "status"}
     tampered = _replace_first_item(
         plan,
-        params={**item.params, "column": "status"},
-        target_set=TargetSet(count=99, fingerprint="targets:orders-status-v1"),
+        params=tampered_params,
+        target_set=_target_set_from_received_params(tampered_params),
     )
     assert tampered.fingerprint == plan.fingerprint
     assert _first_item(tampered).params["column"] == "status"
@@ -156,7 +182,8 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
     _assert_refusal_is_safe(admitted.value)
 
     monkeypatch.setattr(
-        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
     )
     monkeypatch.setenv("TRACES_DIR", str(tmp_path))
     engine = _RecordingEngine()
@@ -207,7 +234,8 @@ def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
     )
     admission = create_apply_admission(tampered, evaluation, _decision(), now=NOW)
     monkeypatch.setattr(
-        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
     )
     monkeypatch.setenv("TRACES_DIR", str(tmp_path))
     engine = _RecordingEngine()
@@ -331,7 +359,8 @@ def test_apply_refuses_plan_and_evaluation_tampers(
     admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
     tampered_plan, tampered_evaluation = tamper(plan, evaluation)
     monkeypatch.setattr(
-        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
     )
     monkeypatch.setenv("TRACES_DIR", str(tmp_path))
     engine = _RecordingEngine()
@@ -356,7 +385,8 @@ def test_apply_refuses_decision_link_and_expiry_tampers(
     )
     admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
     monkeypatch.setattr(
-        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
     )
     monkeypatch.setenv("TRACES_DIR", str(tmp_path))
 

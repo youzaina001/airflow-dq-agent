@@ -16,7 +16,10 @@ from airflow_dq_agent.contracts.models import (
     RemediationPlan,
 )
 from airflow_dq_agent.planning import current_policy_fingerprint
-from airflow_dq_agent.planning.integrity import evaluation_payload_fingerprint
+from airflow_dq_agent.planning.integrity import (
+    evaluation_payload_fingerprint,
+    verify_plan_integrity,
+)
 
 _DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
 
@@ -170,6 +173,7 @@ def evaluate_proposal(
 
 def evaluate_plan(plan: RemediationPlan) -> EvalReport:
     """Evaluate a compiled plan, never a candidate's text, SQL, or parameters."""
+    verify_plan_integrity(plan, refusing="evaluation")
     executable = [item for item in plan.items if item.kind == "executable"]
     compilation_ok = not plan.blocked and len(executable) == len(plan.items)
     compilation = _score(

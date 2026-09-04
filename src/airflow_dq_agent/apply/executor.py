@@ -214,6 +214,10 @@ def apply_plan(
                     raise PermissionError(
                         "Refusing apply: controlled target set changed after plan compilation"
                     )
+            # Nested params dicts stay mutable; re-check immediately before render.
+            refusing = "dry run" if dry_run else "apply"
+            verify_plan_integrity(plan, refusing=refusing)
+            verify_executable_params(plan, refusing=refusing)
             for item in executable:
                 action = get_governed_action(item.action_id)
                 rendered = action.render(
