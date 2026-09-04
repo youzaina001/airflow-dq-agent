@@ -24,6 +24,12 @@ from airflow_dq_agent.contracts.models import (
     RemediationPlan,
 )
 from airflow_dq_agent.planning import current_policy_fingerprint
+from airflow_dq_agent.planning.integrity import (
+    verify_admission_integrity,
+    verify_evaluation_integrity,
+    verify_executable_params,
+    verify_plan_integrity,
+)
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.traces.lineage import apply_result_event
 from airflow_dq_agent.traces.writer import JsonlAuditSink, append_event
@@ -58,21 +64,15 @@ def _require_plan_admission(
         raise PermissionError("Refusing apply: remediation plan is blocked")
     if not evaluation.passed:
         raise PermissionError("Refusing apply: remediation-plan evaluation did not pass")
-    if evaluation.plan_id != plan.plan_id or evaluation.plan_fingerprint != plan.fingerprint:
-        raise PermissionError("Refusing apply: evaluation does not belong to this remediation plan")
-    if (
-        admission.plan_id != plan.plan_id
-        or admission.plan_fingerprint != plan.fingerprint
-        or admission.quality_run_id != plan.quality_run_id
-        or admission.evaluation_id != evaluation.evaluation_id
-        or admission.evaluation_fingerprint != evaluation.fingerprint
-    ):
-        raise PermissionError("Refusing apply: admission does not authorize this evaluated plan")
+    verify_plan_integrity(plan, refusing="apply")
+    verify_evaluation_integrity(plan, evaluation, refusing="apply")
+    verify_admission_integrity(plan, evaluation, admission, refusing="apply")
     if now > admission.expires_at:
         raise PermissionError("Refusing apply: apply admission has expired")
     current_policy = current_policy_fingerprint(plan)
     if current_policy != plan.policy_fingerprint or current_policy != admission.policy_fingerprint:
         raise PermissionError("Refusing apply: policy snapshot drifted after admission")
+    verify_executable_params(plan, refusing="apply")
 
 
 def _require_dry_run(plan: RemediationPlan, evaluation: EvalReport) -> None:
@@ -80,12 +80,11 @@ def _require_dry_run(plan: RemediationPlan, evaluation: EvalReport) -> None:
         raise PermissionError("Refusing dry run: remediation plan is blocked")
     if not evaluation.passed:
         raise PermissionError("Refusing dry run: remediation-plan evaluation did not pass")
-    if evaluation.plan_id != plan.plan_id or evaluation.plan_fingerprint != plan.fingerprint:
-        raise PermissionError(
-            "Refusing dry run: evaluation does not belong to this remediation plan"
-        )
+    verify_plan_integrity(plan, refusing="dry run")
+    verify_evaluation_integrity(plan, evaluation, refusing="dry run")
     if current_policy_fingerprint(plan) != plan.policy_fingerprint:
         raise PermissionError("Refusing dry run: policy snapshot drifted after evaluation")
+    verify_executable_params(plan, refusing="dry run")
 
 
 def _result_fingerprint(

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -7,18 +7,16 @@ import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode, apply_plan
 from airflow_dq_agent.contracts.models import (
-    ApplyAdmission,
     CandidateAction,
-    EvalReport,
-    ExecutablePlanItem,
+    HumanDecision,
     Proposal,
     QualityEvidence,
-    RemediationPlan,
     TargetSet,
 )
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 
 
@@ -139,111 +137,59 @@ def test_dry_run_retains_applied_steps_on_the_result(
 
 
 @pytest.mark.parametrize(
-    ("action_id", "table", "params", "mutates"),
+    ("check_id", "action_id", "mutates"),
     [
-        (
-            "no_op_alert",
-            "fact_orders",
-            {"check_id": "fact_orders.total_amount.completeness"},
-            False,
-        ),
-        (
-            "quarantine_nulls",
-            "fact_orders",
-            {"column": "total_amount", "pk_column": "order_id"},
-            True,
-        ),
-        (
-            "quarantine_invalids",
-            "fact_orders",
-            {
-                "check_id": "fact_orders.status.validity",
-                "column": "status",
-                "pk_column": "order_id",
-            },
-            True,
-        ),
-        ("null_fill", "fact_orders", {"column": "total_amount", "fill_value": 0.0}, True),
-        (
-            "quarantine_orphans",
-            "fact_orders",
-            {
-                "fk_column": "customer_sk",
-                "ref_table": "dim_customer",
-                "ref_column": "customer_sk",
-                "pk_column": "order_id",
-            },
-            True,
-        ),
-        (
-            "dedupe_keep_min_pk",
-            "fact_orders",
-            {"business_key": ["customer_sk", "order_ts"], "pk_column": "order_id"},
-            True,
-        ),
-        ("schema_drift_ticket", "fact_orders", {"check_id": "fact_orders.schema_drift"}, False),
+        ("fact_orders.total_amount.completeness", "quarantine_nulls", True),
+        ("fact_orders.status.validity", "quarantine_invalids", True),
+        ("fact_orders.order_nk.uniqueness", "dedupe_keep_min_pk", True),
+        ("fact_order_items.product_sk.referential_integrity", "quarantine_orphans", True),
+        ("dim_customer.schema_drift", "schema_drift_ticket", False),
     ],
 )
 def test_apply_uses_each_governed_action_mutation_capability(
     monkeypatch: pytest.MonkeyPatch,
+    check_id: str,
     action_id: str,
-    table: str,
-    params: dict[str, object],
     mutates: bool,
 ) -> None:
     now = datetime(2026, 8, 30, tzinfo=UTC)
-    target_set = TargetSet(count=0, fingerprint=f"targets:{action_id}")
-    item = ExecutablePlanItem(
-        item_id=f"item:{action_id}",
-        action_id=action_id,
-        table=table,
-        params=params,
-        evidence=[
-            QualityEvidence(
-                check_id="fact_orders.total_amount.completeness",
-                contract_id="warehouse.fact_orders",
-            )
-        ],
-        target_set=target_set,
-        policy_fingerprint=f"policy:{action_id}",
+    report = seeded_failure_report()
+    failed = report.get(check_id)
+    assert failed is not None
+    scoped_report = report.model_copy(update={"checks": [failed]})
+    plan = compile_remediation_plan(
+        scoped_report,
+        Proposal(
+            summary="Apply one governed action.",
+            root_cause_hypothesis="A declared check failed.",
+            candidate_actions=[
+                CandidateAction(
+                    action_id=action_id,
+                    evidence=[
+                        QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                    ],
+                    rationale="Request the reviewed action declared by this check.",
+                )
+            ],
+            confidence=0.9,
+        ),
+        target_sets=_TargetSets(),
     )
-    plan = RemediationPlan(
-        plan_id=f"plan:{action_id}",
-        quality_run_id="quality-run",
-        candidate_fingerprint="candidate",
-        policy_fingerprint=f"policy:{action_id}",
-        items=[item],
-        blocked=False,
-        fingerprint=f"plan-fingerprint:{action_id}",
-    )
-    evaluation = EvalReport(
-        evaluation_id=f"evaluation:{action_id}",
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        policy_fingerprint=plan.policy_fingerprint,
-        fingerprint=f"evaluation-fingerprint:{action_id}",
-        passed=True,
-        scores=[],
-    )
-    admission = ApplyAdmission(
-        quality_run_id=plan.quality_run_id,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
-        decision_id="decision",
-        decision_event_id="decision-event",
-        policy_fingerprint=plan.policy_fingerprint,
-        expires_at=now + timedelta(hours=1),
-        fingerprint=f"admission:{action_id}",
+    evaluation = evaluate_plan(plan)
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        HumanDecision(
+            decision="Approve",
+            actor="approver-1",
+            note="Reviewed target set.",
+            audit_event_id="decision-event-1",
+        ),
+        now=now,
     )
     engine = _MutationRecordingEngine()
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
-    )
-    monkeypatch.setattr(
-        "airflow_dq_agent.apply.executor.current_policy_fingerprint",
-        lambda _: plan.policy_fingerprint,
     )
     monkeypatch.setattr("airflow_dq_agent.apply.executor.JsonlAuditSink", _NoopAuditSink)
 
