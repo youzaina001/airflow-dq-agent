@@ -343,6 +343,8 @@ class AuditEvent(BaseModel):
     plan_id: str | None = None
     plan_fingerprint: str | None = None
     policy_fingerprint: str | None = None
+    target_count: int | None = None
+    target_set_fingerprint: str | None = None
     evaluation_id: str | None = None
     evaluation_fingerprint: str | None = None
     decision_id: str | None = None
