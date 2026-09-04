@@ -224,6 +224,7 @@ def test_admission_and_apply_refuse_rehashed_plan_retargeting_catalogued_check(
     retargeted = retargeted.model_copy(
         update={
             "fingerprint": plan_payload_fingerprint(
+                plan_id=retargeted.plan_id,
                 quality_run_id=retargeted.quality_run_id,
                 candidate_fingerprint=retargeted.candidate_fingerprint,
                 policy_fingerprint=retargeted.policy_fingerprint,
@@ -275,6 +276,7 @@ def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
     tampered = tampered.model_copy(
         update={
             "fingerprint": plan_payload_fingerprint(
+                plan_id=tampered.plan_id,
                 quality_run_id=tampered.quality_run_id,
                 candidate_fingerprint=tampered.candidate_fingerprint,
                 policy_fingerprint=tampered.policy_fingerprint,
@@ -286,6 +288,7 @@ def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
     evaluation = evaluation.model_copy(
         update={
             "fingerprint": evaluation_payload_fingerprint(
+                evaluation_id=evaluation.evaluation_id,
                 plan_id=evaluation.plan_id,
                 plan_fingerprint=evaluation.plan_fingerprint,
                 passed=evaluation.passed,
@@ -479,6 +482,110 @@ def test_apply_refuses_decision_link_and_expiry_tampers(
         assert 't."status" IS NULL' not in " ".join(engine.transaction.connection.statements)
 
 
+def test_apply_refuses_rewritten_admission_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    plan, evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    forged_id = "forged-admission-id"
+    tampered = admission.model_copy(update={"admission_id": forged_id})
+    assert tampered.fingerprint == admission.fingerprint
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine()
+    with pytest.raises(PermissionError, match="received payload") as refused:
+        apply_plan(
+            plan,
+            evaluation,
+            tampered,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=NOW,
+            run_id="unit-forged-admission-id",
+        )
+    _assert_refusal_is_safe(refused.value)
+    rendered = " ".join(engine.transaction.connection.statements)
+    assert forged_id not in rendered
+    assert engine.transaction.connection.statements == []
+
+
+def test_admission_and_apply_refuse_rewritten_evaluation_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    plan, evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    tampered = evaluation.model_copy(update={"evaluation_id": "forged-evaluation-id"})
+    assert tampered.fingerprint == evaluation.fingerprint
+
+    with pytest.raises(PermissionError, match="received payload") as admitted:
+        create_apply_admission(plan, tampered, _decision(), now=NOW, report=report)
+    _assert_refusal_is_safe(admitted.value)
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine()
+    with pytest.raises(PermissionError, match="received payload") as applied:
+        apply_plan(
+            plan,
+            tampered,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=NOW,
+            run_id="unit-forged-evaluation-id",
+        )
+    _assert_refusal_is_safe(applied.value)
+    assert engine.transaction.connection.statements == []
+
+
+def test_admission_and_apply_refuse_rewritten_plan_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    plan, evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    tampered = plan.model_copy(update={"plan_id": "forged-plan-id"})
+    assert tampered.fingerprint == plan.fingerprint
+
+    with pytest.raises(PermissionError, match="received payload") as admitted:
+        create_apply_admission(tampered, evaluation, _decision(), now=NOW, report=report)
+    _assert_refusal_is_safe(admitted.value)
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine()
+    with pytest.raises(PermissionError, match="received payload") as applied:
+        apply_plan(
+            tampered,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=NOW,
+            run_id="unit-forged-plan-id",
+        )
+    _assert_refusal_is_safe(applied.value)
+    assert engine.transaction.connection.statements == []
+
+
 def test_plan_evaluation_and_admission_reject_unexpected_fields() -> None:
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
@@ -505,12 +612,14 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
     )
     admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
     assert plan.fingerprint == plan_payload_fingerprint(
+        plan_id=plan.plan_id,
         quality_run_id=plan.quality_run_id,
         candidate_fingerprint=plan.candidate_fingerprint,
         policy_fingerprint=plan.policy_fingerprint,
         items=plan.items,
     )
     assert evaluation.fingerprint == evaluation_payload_fingerprint(
+        evaluation_id=evaluation.evaluation_id,
         plan_id=evaluation.plan_id,
         plan_fingerprint=evaluation.plan_fingerprint,
         passed=evaluation.passed,
@@ -518,6 +627,7 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
         blocked_reasons=evaluation.blocked_reasons,
     )
     assert admission.fingerprint == admission_payload_fingerprint(
+        admission_id=admission.admission_id,
         quality_run_id=admission.quality_run_id,
         plan_id=admission.plan_id,
         plan_fingerprint=admission.plan_fingerprint,
@@ -531,6 +641,7 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
     )
     assert plan.fingerprint == canonical_fingerprint(
         {
+            "plan_id": plan.plan_id,
             "quality_run_id": plan.quality_run_id,
             "candidate_fingerprint": plan.candidate_fingerprint,
             "policy_fingerprint": plan.policy_fingerprint,
