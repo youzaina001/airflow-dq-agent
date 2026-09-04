@@ -1,7 +1,36 @@
-"""The XCom boundary must omit every sample_failures field and keep downstream fields."""
+"""The XCom boundary is an allow-list: named Quality Evidence fields only."""
 
 from airflow_dq_agent.contracts.models import QualitySuiteReport
-from airflow_dq_agent.quality import sample_free_report, seeded_failure_report
+from airflow_dq_agent.quality import (
+    project_report_for_xcom,
+    sample_free_report,
+    seeded_failure_report,
+)
+from airflow_dq_agent.quality.sanitize import XCOM_CHECK_FIELDS, XCOM_REPORT_FIELDS
+
+# Test-owned approved fields. Production XCOM_* tuples are locked against these literals.
+APPROVED_REPORT_FIELDS: tuple[str, ...] = (
+    "run_id",
+    "report_id",
+    "fingerprint",
+    "audit_event_id",
+    "generated_at",
+    "checks",
+    "observed_columns",
+)
+
+APPROVED_CHECK_FIELDS: tuple[str, ...] = (
+    "check_id",
+    "table",
+    "column",
+    "dimension",
+    "status",
+    "n_failed",
+    "n_total",
+    "message",
+    "contract_id",
+    "predicate",
+)
 
 
 def _assert_no_sample_fields(node: object) -> None:
@@ -59,4 +88,36 @@ def test_sanitized_payload_round_trips_for_downstream_tasks() -> None:
     assert revived.failed_count == report.failed_count
     assert revived.failing_check_ids == report.failing_check_ids
     assert revived.observed_columns == report.observed_columns
+    assert all(check.sample_failures == [] for check in revived.checks)
+
+
+def test_xcom_allow_list_locked_to_approved_fields() -> None:
+    assert XCOM_REPORT_FIELDS == APPROVED_REPORT_FIELDS
+    assert XCOM_CHECK_FIELDS == APPROVED_CHECK_FIELDS
+
+
+def test_xcom_projector_omits_unknown_fields() -> None:
+    dumped = seeded_failure_report().model_dump(mode="json")
+    dumped["secret_rows"] = [{"email": "leaked@example.invalid"}]
+    dumped["prompt"] = "do not persist this prompt"
+    dumped["raw_values"] = [{"email": "leaked@example.invalid"}]
+    dumped["checks"][0]["secret_rows"] = [{"email": "leaked@example.invalid"}]
+    dumped["checks"][0]["prompt"] = "do not persist this prompt"
+    dumped["checks"][0]["raw_values"] = [{"email": "leaked@example.invalid"}]
+
+    payload = project_report_for_xcom(dumped)
+
+    assert set(payload) <= set(APPROVED_REPORT_FIELDS)
+    assert "secret_rows" not in payload
+    assert "prompt" not in payload
+    assert "raw_values" not in payload
+    assert "sample_failures" not in payload
+    for check in payload["checks"]:
+        assert set(check) <= set(APPROVED_CHECK_FIELDS)
+        assert "secret_rows" not in check
+        assert "prompt" not in check
+        assert "raw_values" not in check
+        assert "sample_failures" not in check
+    revived = QualitySuiteReport.model_validate(payload)
+    assert revived.failing_check_ids
     assert all(check.sample_failures == [] for check in revived.checks)
