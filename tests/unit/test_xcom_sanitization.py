@@ -6,6 +6,7 @@ from airflow_dq_agent.quality import (
     sample_free_report,
     seeded_failure_report,
 )
+from airflow_dq_agent.quality.sanitize import XCOM_CHECK_FIELDS, XCOM_REPORT_FIELDS
 
 
 def _assert_no_sample_fields(node: object) -> None:
@@ -70,15 +71,19 @@ def test_xcom_projector_omits_unknown_fields() -> None:
     dumped = seeded_failure_report().model_dump(mode="json")
     dumped["secret_rows"] = [{"email": "leaked@example.invalid"}]
     dumped["prompt"] = "do not persist this prompt"
+    dumped["raw_values"] = [{"email": "leaked@example.invalid"}]
     dumped["checks"][0]["secret_rows"] = [{"email": "leaked@example.invalid"}]
     dumped["checks"][0]["prompt"] = "do not persist this prompt"
+    dumped["checks"][0]["raw_values"] = [{"email": "leaked@example.invalid"}]
 
     payload = project_report_for_xcom(dumped)
 
+    assert set(payload) <= set(XCOM_REPORT_FIELDS)
     assert "secret_rows" not in payload
     assert "prompt" not in payload
     assert "sample_failures" not in payload
     for check in payload["checks"]:
+        assert set(check) <= set(XCOM_CHECK_FIELDS)
         assert "secret_rows" not in check
         assert "prompt" not in check
         assert "sample_failures" not in check
