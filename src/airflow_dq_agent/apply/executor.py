@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -36,6 +38,12 @@ from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.traces.lineage import apply_result_event
 from airflow_dq_agent.traces.writer import JsonlAuditSink, append_event
 from airflow_dq_agent.warehouse.db import make_engine
+
+logger = logging.getLogger(__name__)
+
+
+class _AuditEventSink(Protocol):
+    def append(self, event: AuditEvent) -> None: ...
 
 
 class AppliedStep(BaseModel):
@@ -174,6 +182,41 @@ def _record_apply_result(
     )
 
 
+def _emit_apply_failed(
+    plan: RemediationPlan,
+    evaluation: EvalReport,
+    admission: ApplyAdmission | None,
+    *,
+    result: ApplyResult,
+    resolved_run_id: str,
+    dry_run: bool,
+) -> None:
+    failure = apply_result_event(
+        plan,
+        evaluation,
+        admission,
+        result_id=result.apply_result_id,
+        result_fingerprint=_result_fingerprint(
+            plan, admission, resolved_run_id, dry_run, result.steps
+        ),
+        dry_run=True,
+        reasons=["controlled apply failed before a result could be admitted"],
+    ).model_copy(update={"kind": "apply_failed"})
+    append_event(failure)
+
+
+def _export_supplementary_apply_event(sink: _AuditEventSink, event: AuditEvent) -> None:
+    """JSONL is not terminal apply authority; export faults must not emit apply_failed."""
+    try:
+        sink.append(event)
+    except OSError:
+        logger.warning(
+            "supplementary jsonl export failed after committed apply event_id=%s kind=%s",
+            event.event_id,
+            event.kind,
+        )
+
+
 def apply_plan(
     plan: RemediationPlan,
     evaluation: EvalReport,
@@ -185,6 +228,7 @@ def apply_plan(
     dsn: str | None = None,
     run_id: str | None = None,
     now: datetime | None = None,
+    audit_sink: _AuditEventSink | None = None,
 ) -> ApplyResult:
     """Recheck a whole-plan admission, lock targets, and mutate only matching rows.
 
@@ -209,6 +253,8 @@ def apply_plan(
         plan_id=plan.plan_id,
         admission_id=admission.admission_id if admission else None,
     )
+    sink: _AuditEventSink = audit_sink if audit_sink is not None else JsonlAuditSink()
+    event: AuditEvent | None = None
     try:
         with database.begin() as connection:
             _set_controlled_transaction_mode(connection, dry_run=dry_run)
@@ -263,21 +309,19 @@ def apply_plan(
                     connection, event=event, result=result, plan=plan, admission=admission
                 )
         if dry_run:
+            assert event is not None
             append_event(event)
-        else:
-            JsonlAuditSink().append(event)
     except Exception:
-        failure = apply_result_event(
+        _emit_apply_failed(
             plan,
             evaluation,
             admission,
-            result_id=result.apply_result_id,
-            result_fingerprint=_result_fingerprint(
-                plan, admission, resolved_run_id, dry_run, result.steps
-            ),
-            dry_run=True,
-            reasons=["controlled apply failed before a result could be admitted"],
-        ).model_copy(update={"kind": "apply_failed"})
-        append_event(failure)
+            result=result,
+            resolved_run_id=resolved_run_id,
+            dry_run=dry_run,
+        )
         raise
+    if not dry_run:
+        assert event is not None
+        _export_supplementary_apply_event(sink, event)
     return result

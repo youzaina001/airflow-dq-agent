@@ -1,3 +1,5 @@
+import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,10 +10,13 @@ from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode, apply_plan
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import (
+    ApplyAdmission,
     CandidateAction,
+    EvalReport,
     HumanDecision,
     Proposal,
     QualityEvidence,
+    RemediationPlan,
     TargetSet,
 )
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
@@ -95,6 +100,105 @@ class _MutationRecordingEngine:
 class _NoopAuditSink:
     def append(self, _: object) -> None:
         pass
+
+
+class _ParamRecordingConnection:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def execute(self, statement: object, params: dict[str, object] | None = None) -> object:
+        self.calls.append((str(statement), params))
+        return type("Result", (), {"rowcount": 1})()
+
+
+class _CommitTrackingTransaction:
+    def __init__(self) -> None:
+        self.connection = _ParamRecordingConnection()
+        self.committed = False
+        self.rolled_back = False
+
+    def __enter__(self) -> _ParamRecordingConnection:
+        return self.connection
+
+    def __exit__(self, exc_type: type[BaseException] | None, *_: object) -> None:
+        if exc_type is None:
+            self.committed = True
+        else:
+            self.rolled_back = True
+
+
+class _CommitTrackingEngine:
+    def __init__(self) -> None:
+        self.transaction = _CommitTrackingTransaction()
+
+    def begin(self) -> _CommitTrackingTransaction:
+        return self.transaction
+
+
+class _JsonlFaultAfterCommit:
+    """Raises at the real JSONL append seam, but only once the warehouse txn has committed."""
+
+    def __init__(self, transaction: _CommitTrackingTransaction) -> None:
+        self._transaction = transaction
+        self.events: list[object] = []
+        self.append_after_commit = False
+
+    def append(self, event: object) -> None:
+        self.append_after_commit = self._transaction.committed
+        self.events.append(event)
+        raise OSError("jsonl export fault")
+
+
+class _LockBoomResolver:
+    def __init__(self, **_: object) -> None:
+        pass
+
+    def resolve_item(self, _: object, item: object) -> TargetSet:
+        del item
+        raise AssertionError("mutation apply must lock, not resolve")
+
+    def lock_and_resolve(self, _: object, item: object) -> TargetSet:
+        del item
+        raise RuntimeError("lock failed before mutation")
+
+
+def _approved_quarantine_plan(
+    now: datetime,
+) -> tuple[RemediationPlan, EvalReport, ApplyAdmission]:
+    report = seeded_failure_report()
+    failed = report.get("fact_orders.total_amount.completeness")
+    assert failed is not None
+    plan = compile_remediation_plan(
+        report.model_copy(update={"checks": [failed]}),
+        Proposal(
+            summary="Quarantine rows with missing totals.",
+            root_cause_hypothesis="The source omitted a required value.",
+            candidate_actions=[
+                CandidateAction(
+                    action_id="quarantine_nulls",
+                    evidence=[
+                        QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                    ],
+                    rationale="Preserve source rows for review.",
+                )
+            ],
+            confidence=0.9,
+        ),
+        target_sets=_TargetSets(),
+    )
+    evaluation = evaluate_plan(plan)
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        HumanDecision(
+            decision="Approve",
+            actor="approver-1",
+            note="Reviewed target set.",
+            audit_event_id="decision-event-1",
+        ),
+        now=now,
+    )
+    return plan, evaluation, admission
 
 
 def test_dry_run_retains_applied_steps_on_the_result(
@@ -219,6 +323,99 @@ def test_apply_uses_each_governed_action_mutation_capability(
     ]
     assert len(executed_mutations) == int(mutates)
     assert result.steps[0].rowcount == (1 if mutates else 0)
+
+
+def test_jsonl_fault_after_commit_keeps_terminal_apply_success(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission = _approved_quarantine_plan(now)
+    engine = _CommitTrackingEngine()
+    sink = _JsonlFaultAfterCommit(engine.transaction)
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="airflow_dq_agent.apply.executor"):
+        result = apply_plan(
+            plan,
+            evaluation,
+            admission,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            run_id="unit-jsonl-fault",
+            audit_sink=sink,
+        )
+
+    statements = [sql for sql, _ in engine.transaction.connection.calls]
+    apply_records = [params for _, params in engine.transaction.connection.calls if params]
+    recorded_kinds = [str(params["kind"]) for params in apply_records if "kind" in params]
+    bodies = [json.loads(str(params["body"])) for params in apply_records if "body" in params]
+    sink_kinds = [getattr(event, "kind", None) for event in sink.events]
+    messages = caplog.text + json.dumps(bodies) + json.dumps(sink_kinds)
+
+    assert engine.transaction.committed
+    assert not engine.transaction.rolled_back
+    assert sink.append_after_commit
+    assert any("record_apply_result" in sql for sql in statements)
+    assert any(sql.lstrip().startswith(("INSERT", "UPDATE")) for sql in statements)
+    assert result.dry_run is False
+    assert result.fingerprint
+    assert result.audit_event_id
+    assert recorded_kinds == ["apply_succeeded"]
+    assert sink_kinds == ["apply_succeeded"]
+    assert lineage == []
+    assert "apply_failed" not in recorded_kinds
+    assert "apply_failed" not in sink_kinds
+    assert "export" in caplog.text.lower()
+    assert "sample_failures" not in messages
+    assert "root_cause_hypothesis" not in messages
+
+
+def test_pre_commit_apply_failure_still_emits_apply_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission = _approved_quarantine_plan(now)
+    engine = _CommitTrackingEngine()
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _LockBoomResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    with pytest.raises(RuntimeError, match="lock failed before mutation"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            audit_sink=_NoopAuditSink(),
+        )
+
+    apply_records = [params for _, params in engine.transaction.connection.calls if params]
+    lineage_kinds = [getattr(event, "kind", None) for event in lineage]
+    assert engine.transaction.rolled_back
+    assert not engine.transaction.committed
+    assert apply_records == []
+    assert lineage_kinds == ["apply_failed"]
+    failure = lineage[0]
+    body = json.dumps(failure.model_dump(mode="json"))  # type: ignore[attr-defined]
+    assert "sample_failures" not in body
+    assert getattr(failure, "reasons", []) == [
+        "controlled apply failed before a result could be admitted"
+    ]
 
 
 def test_apply_uses_a_serializable_snapshot_before_target_locking() -> None:
