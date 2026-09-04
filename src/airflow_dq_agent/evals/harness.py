@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from airflow_dq_agent.action_definitions import is_governed_action
 from airflow_dq_agent.config import get_settings
-from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
     EvalReport,
     EvalScore,
@@ -17,6 +16,7 @@ from airflow_dq_agent.contracts.models import (
     RemediationPlan,
 )
 from airflow_dq_agent.planning import current_policy_fingerprint
+from airflow_dq_agent.planning.integrity import evaluation_payload_fingerprint
 
 _DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
 
@@ -207,14 +207,12 @@ def evaluate_plan(plan: RemediationPlan) -> EvalReport:
     scores = [compilation, policy, targets]
     blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
     passed = not blocked
-    fingerprint = canonical_fingerprint(
-        {
-            "plan_id": plan.plan_id,
-            "plan_fingerprint": plan.fingerprint,
-            "passed": passed,
-            "scores": [score.model_dump(mode="json") for score in scores],
-            "blocked_reasons": blocked,
-        }
+    fingerprint = evaluation_payload_fingerprint(
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        passed=passed,
+        scores=scores,
+        blocked_reasons=blocked,
     )
     return EvalReport(
         plan_id=plan.plan_id,

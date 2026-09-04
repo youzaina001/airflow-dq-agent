@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Dimension(StrEnum):
@@ -152,12 +152,16 @@ class RemediationStep(BaseModel):
 class QualityEvidence(BaseModel):
     """A failed-check reference scoped by the remediation plan's quality run."""
 
+    model_config = ConfigDict(extra="forbid")
+
     check_id: str = Field(min_length=1)
     contract_id: str = Field(min_length=1)
 
 
 class CandidateAction(BaseModel):
     """An untrusted request for one action; it has no SQL parameters or authority."""
+
+    model_config = ConfigDict(extra="forbid")
 
     action_id: str = Field(min_length=1)
     evidence: list[QualityEvidence] = Field(min_length=1)
@@ -167,11 +171,15 @@ class CandidateAction(BaseModel):
 class TargetSet(BaseModel):
     """Durable summary of a controlled target set; never carries its raw keys."""
 
+    model_config = ConfigDict(extra="forbid")
+
     count: int = Field(ge=0)
     fingerprint: str = Field(min_length=1)
 
 
 class ExecutablePlanItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["executable"] = "executable"
     item_id: str = Field(min_length=1)
     action_id: str = Field(min_length=1)
@@ -183,6 +191,8 @@ class ExecutablePlanItem(BaseModel):
 
 
 class NonExecutablePlanItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["non_executable"] = "non_executable"
     item_id: str = Field(min_length=1)
     evidence: list[QualityEvidence] = Field(min_length=1)
@@ -198,6 +208,8 @@ PlanItem = Annotated[
 class RemediationPlan(BaseModel):
     """A deterministic, complete collection of executable or blocked plan items."""
 
+    model_config = ConfigDict(extra="forbid")
+
     plan_id: str = Field(default_factory=lambda: uuid4().hex)
     quality_run_id: str = Field(min_length=1)
     candidate_fingerprint: str = Field(min_length=1)
@@ -211,6 +223,8 @@ class RemediationPlan(BaseModel):
 
 class ApplyAdmission(BaseModel):
     """A time-bounded authorization for exactly one evaluated remediation plan."""
+
+    model_config = ConfigDict(extra="forbid")
 
     admission_id: str = Field(default_factory=lambda: uuid4().hex)
     quality_run_id: str = Field(min_length=1)
@@ -229,6 +243,8 @@ class ApplyAdmission(BaseModel):
 class Proposal(BaseModel):
     """Untrusted typed candidate output. Compilation grants no candidate authority."""
 
+    model_config = ConfigDict(extra="forbid")
+
     proposal_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
     summary: str
@@ -239,6 +255,8 @@ class Proposal(BaseModel):
 
 
 class EvalScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     score: float = Field(ge=0.0, le=1.0)
     passed: bool
@@ -247,6 +265,8 @@ class EvalScore(BaseModel):
 
 
 class EvalReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     evaluation_id: str = Field(default_factory=lambda: uuid4().hex)
     audit_event_id: str | None = None
     plan_id: str | None = None
@@ -268,6 +288,8 @@ class EvalReport(BaseModel):
 
 
 class HumanDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     decision_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
     audit_event_id: str | None = None

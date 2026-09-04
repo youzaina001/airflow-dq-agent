@@ -17,6 +17,7 @@ from airflow_dq_agent.contracts.models import (
     TargetSet,
 )
 from airflow_dq_agent.contracts.tables import get_table_contract
+from airflow_dq_agent.planning.integrity import plan_payload_fingerprint
 from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 
 RENDERER_VERSION = "controlled-renderer-v2"
@@ -165,13 +166,11 @@ def compile_remediation_plan(
         [item.policy_fingerprint for item in items if isinstance(item, ExecutablePlanItem)]
     )
     candidate_fingerprint = canonical_fingerprint(candidate)
-    plan_fingerprint = canonical_fingerprint(
-        {
-            "quality_run_id": report.run_id,
-            "candidate_fingerprint": candidate_fingerprint,
-            "policy_fingerprint": policy_fingerprint,
-            "items": [item.model_dump(mode="json") for item in items],
-        }
+    plan_fingerprint = plan_payload_fingerprint(
+        quality_run_id=report.run_id,
+        candidate_fingerprint=candidate_fingerprint,
+        policy_fingerprint=policy_fingerprint,
+        items=items,
     )
     return RemediationPlan(
         quality_run_id=report.run_id,
