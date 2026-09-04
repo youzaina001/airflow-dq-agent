@@ -123,7 +123,12 @@ def evaluation_event(
 
 
 def decision_event(
-    quality_run_id: str, decision: HumanDecision, predecessor: AuditEvent | str
+    quality_run_id: str,
+    decision: HumanDecision,
+    predecessor: AuditEvent | str,
+    *,
+    plan_id: str | None = None,
+    plan_fingerprint: str | None = None,
 ) -> AuditEvent:
     kind = {
         "Approve": "human_approved",
@@ -141,6 +146,8 @@ def decision_event(
         kind,  # type: ignore[arg-type]
         quality_run_id=quality_run_id,
         predecessor_ids=[_predecessor_id(predecessor)],
+        plan_id=plan_id,
+        plan_fingerprint=plan_fingerprint,
         decision_id=decision.decision_id,
         decision_fingerprint=decision_fingerprint,
         decision_outcome=decision.decision,

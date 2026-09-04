@@ -15,6 +15,7 @@ from airflow_dq_agent.contracts.fingerprints import (
 )
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
+    ApprovalReview,
     CandidateAction,
     CheckResult,
     EvalReport,
@@ -36,7 +37,9 @@ from airflow_dq_agent.planning.integrity import (
     plan_payload_fingerprint,
     warehouse_environment_id,
 )
+from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
+from airflow_dq_agent.traces import InMemoryAuditRepository
 from airflow_dq_agent.traces.lineage import decision_event, quality_report_event
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
@@ -111,12 +114,44 @@ class _MatchingTargetResolver:
         return item.target_set  # type: ignore[union-attr]
 
 
-def _decision() -> HumanDecision:
+def _approval(
+    plan: RemediationPlan, evaluation: EvalReport
+) -> tuple[HumanDecision, InMemoryAuditRepository]:
+    review = build_approval_review(plan, evaluation, ttl=timedelta(hours=24))
     decision = HumanDecision(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
-        audit_event_id="decision-event-1",
+        fingerprint=review.fingerprint,
+    )
+    event = decision_event(
+        plan.quality_run_id,
+        decision,
+        "evaluation-event-1",
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+    )
+    return (
+        decision.model_copy(update={"audit_event_id": event.event_id}),
+        InMemoryAuditRepository([event]),
+    )
+
+
+def _admit(
+    plan: RemediationPlan,
+    evaluation: EvalReport,
+    report: QualitySuiteReport,
+    *,
+    now: datetime = NOW,
+) -> ApplyAdmission:
+    decision, repository = _approval(plan, evaluation)
+    return create_apply_admission(
+        plan,
+        evaluation,
+        decision,
+        now=now,
+        report=report,
+        audit_repository=repository,
     )
     return decision.model_copy(
         update={
@@ -218,7 +253,7 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
     item = _first_item(plan)
     tampered_params = {**item.params, "column": "status"}
     tampered = _replace_first_item(
@@ -229,8 +264,16 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
     assert tampered.fingerprint == plan.fingerprint
     assert _first_item(tampered).params["column"] == "status"
 
+    decision, repository = _approval(plan, evaluation)
     with pytest.raises(PermissionError, match="received payload") as admitted:
-        create_apply_admission(tampered, evaluation, _decision(), now=NOW, report=report)
+        create_apply_admission(
+            tampered,
+            evaluation,
+            decision,
+            now=NOW,
+            report=report,
+            audit_repository=repository,
+        )
     _assert_refusal_is_safe(admitted.value)
 
     monkeypatch.setattr(
@@ -271,9 +314,15 @@ def test_admission_and_apply_refuse_report_payload_tamper_in_consistent_plan_for
         forged_report, ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
 
+    decision, repository = _approval(forged_plan, forged_evaluation)
     with pytest.raises(PermissionError, match="quality report fingerprint") as admitted:
         create_apply_admission(
-            forged_plan, forged_evaluation, _decision(), now=NOW, report=forged_report
+            forged_plan,
+            forged_evaluation,
+            decision,
+            now=NOW,
+            report=forged_report,
+            audit_repository=repository,
         )
     _assert_refusal_is_safe(admitted.value)
 
@@ -331,7 +380,19 @@ def test_admission_and_apply_refuse_rehashed_plan_retargeting_catalogued_check(
     assert retargeted.fingerprint != origin_plan.fingerprint
 
     with pytest.raises(PermissionError, match="quality") as admitted:
-        create_apply_admission(retargeted, evaluation, _decision(), now=NOW, report=origin_report)
+        create_apply_admission(
+            retargeted,
+            evaluation,
+            HumanDecision(
+                decision="Approve",
+                actor="approver-1",
+                note="Reviewed target set.",
+                audit_event_id="decision-event-1",
+            ),
+            now=NOW,
+            report=origin_report,
+            audit_repository=InMemoryAuditRepository(),
+        )
     _assert_refusal_is_safe(admitted.value)
 
     monkeypatch.setattr(
@@ -388,8 +449,16 @@ def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
             )
         }
     )
+    decision, repository = _approval(tampered, evaluation)
     with pytest.raises(PermissionError, match="Check Policy") as admitted:
-        create_apply_admission(tampered, evaluation, _decision(), now=NOW, report=report)
+        create_apply_admission(
+            tampered,
+            evaluation,
+            decision,
+            now=NOW,
+            report=report,
+            audit_repository=repository,
+        )
     _assert_refusal_is_safe(admitted.value)
 
     monkeypatch.setattr(
@@ -498,9 +567,15 @@ def test_admission_refuses_plan_and_evaluation_tampers(tamper: Any) -> None:
         ("fact_orders.status.validity", "quarantine_invalids"),
     )
     tampered_plan, tampered_evaluation = tamper(plan, evaluation)
+    decision, repository = _approval(plan, evaluation)
     with pytest.raises(PermissionError, match="received payload") as refused:
         create_apply_admission(
-            tampered_plan, tampered_evaluation, _decision(), now=NOW, report=report
+            tampered_plan,
+            tampered_evaluation,
+            decision,
+            now=NOW,
+            report=report,
+            audit_repository=repository,
         )
     _assert_refusal_is_safe(refused.value)
 
@@ -517,7 +592,7 @@ def test_apply_refuses_plan_and_evaluation_tampers(
         ("fact_orders.total_amount.completeness", "quarantine_nulls"),
         ("fact_orders.status.validity", "quarantine_invalids"),
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
     tampered_plan, tampered_evaluation = tamper(plan, evaluation)
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
@@ -545,7 +620,7 @@ def test_apply_refuses_decision_link_and_expiry_tampers(
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
         _ParamsDerivedTargetResolver,
@@ -579,7 +654,7 @@ def test_apply_refuses_rewritten_admission_id(
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
     forged_id = "forged-admission-id"
     tampered = admission.model_copy(update={"admission_id": forged_id})
     assert tampered.fingerprint == admission.fingerprint
@@ -613,12 +688,20 @@ def test_admission_and_apply_refuse_rewritten_evaluation_id(
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
     tampered = evaluation.model_copy(update={"evaluation_id": "forged-evaluation-id"})
     assert tampered.fingerprint == evaluation.fingerprint
 
+    decision, repository = _approval(plan, evaluation)
     with pytest.raises(PermissionError, match="received payload") as admitted:
-        create_apply_admission(plan, tampered, _decision(), now=NOW, report=report)
+        create_apply_admission(
+            plan,
+            tampered,
+            decision,
+            now=NOW,
+            report=report,
+            audit_repository=repository,
+        )
     _assert_refusal_is_safe(admitted.value)
 
     monkeypatch.setattr(
@@ -648,12 +731,20 @@ def test_admission_and_apply_refuse_rewritten_plan_id(
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
     tampered = plan.model_copy(update={"plan_id": "forged-plan-id"})
     assert tampered.fingerprint == plan.fingerprint
 
+    decision, repository = _approval(plan, evaluation)
     with pytest.raises(PermissionError, match="received payload") as admitted:
-        create_apply_admission(tampered, evaluation, _decision(), now=NOW, report=report)
+        create_apply_admission(
+            tampered,
+            evaluation,
+            decision,
+            now=NOW,
+            report=report,
+            audit_repository=repository,
+        )
     _assert_refusal_is_safe(admitted.value)
 
     monkeypatch.setattr(
@@ -681,7 +772,7 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
     assert plan.fingerprint == plan_payload_fingerprint(
         plan_id=plan.plan_id,
         quality_run_id=plan.quality_run_id,
@@ -724,18 +815,21 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
     )
     assert report.fingerprint == report_payload_fingerprint(report)
     assert quality_report_event(report).report_fingerprint == report.fingerprint
-    decision = _decision()
-    assert decision.fingerprint == decision_payload_fingerprint(
+    decision = HumanDecision(
+        decision="Approve",
+        actor="approver-1",
+        note="Reviewed target set.",
+    )
+    expected_decision = decision_payload_fingerprint(
         decision_id=decision.decision_id,
         decision=decision.decision,
         actor=decision.actor,
         note=decision.note,
         decided_at=decision.decided_at,
     )
-    unfingerprinted = decision.model_copy(update={"fingerprint": None})
     assert (
-        decision_event(plan.quality_run_id, unfingerprinted, "predecessor-1").decision_fingerprint
-        == decision.fingerprint
+        decision_event(plan.quality_run_id, decision, "predecessor-1").decision_fingerprint
+        == expected_decision
     )
 
 
@@ -789,11 +883,13 @@ def test_governed_artifacts_reject_unexpected_fields() -> None:
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report)
+    review = build_approval_review(plan, evaluation)
     for model, payload in (
         (RemediationPlan, plan.model_dump(mode="json")),
         (EvalReport, evaluation.model_dump(mode="json")),
         (ApplyAdmission, admission.model_dump(mode="json")),
+        (ApprovalReview, review.model_dump(mode="json")),
         (QualitySuiteReport, report.model_dump(mode="json")),
         (CheckResult, report.checks[0].model_dump(mode="json")),
         (
@@ -814,7 +910,7 @@ def test_apply_refuses_mutation_when_apply_connection_is_a_different_warehouse_e
         ("fact_orders.total_amount.completeness", "quarantine_nulls"),
         warehouse_environment_id="staging.example:5432/warehouse",
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report, now=NOW)
     assert plan.warehouse_environment_id == "staging.example:5432/warehouse"
     assert admission.warehouse_environment_id == "staging.example:5432/warehouse"
 
@@ -845,7 +941,7 @@ def test_apply_accepts_same_warehouse_environment_with_a_different_connection_ro
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report, now=NOW)
     assert plan.warehouse_environment_id == "localhost:5433/warehouse"
     assert admission.warehouse_environment_id == plan.warehouse_environment_id
 
@@ -893,7 +989,7 @@ def test_plan_and_admission_fingerprint_payloads_omit_dsn_secrets(
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report, now=NOW)
     payload_json = canonical_json(captured)
     artifacts_json = canonical_json(
         [plan.model_dump(mode="json"), admission.model_dump(mode="json")]
