@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Protocol
+from uuid import uuid4
 
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
@@ -166,13 +167,16 @@ def compile_remediation_plan(
         [item.policy_fingerprint for item in items if isinstance(item, ExecutablePlanItem)]
     )
     candidate_fingerprint = canonical_fingerprint(candidate)
+    plan_id = uuid4().hex
     plan_fingerprint = plan_payload_fingerprint(
+        plan_id=plan_id,
         quality_run_id=report.run_id,
         candidate_fingerprint=candidate_fingerprint,
         policy_fingerprint=policy_fingerprint,
         items=items,
     )
     return RemediationPlan(
+        plan_id=plan_id,
         quality_run_id=report.run_id,
         candidate_fingerprint=candidate_fingerprint,
         policy_fingerprint=policy_fingerprint,

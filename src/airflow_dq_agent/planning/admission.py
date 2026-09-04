@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
@@ -47,7 +48,9 @@ def create_apply_admission(
     if not audit_event_id or not audit_event_id.strip():
         raise PermissionError("Refusing admission: human decision has no durable audit event")
     expires_at = issued_at + ttl
+    admission_id = uuid4().hex
     fingerprint = admission_payload_fingerprint(
+        admission_id=admission_id,
         quality_run_id=plan.quality_run_id,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
@@ -60,6 +63,7 @@ def create_apply_admission(
         expires_at=expires_at,
     )
     return ApplyAdmission(
+        admission_id=admission_id,
         quality_run_id=plan.quality_run_id,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
