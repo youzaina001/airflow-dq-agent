@@ -23,6 +23,7 @@ PlanItem = ExecutablePlanItem | NonExecutablePlanItem
 
 def plan_payload_fingerprint(
     *,
+    plan_id: str,
     quality_run_id: str,
     candidate_fingerprint: str,
     policy_fingerprint: str,
@@ -31,6 +32,7 @@ def plan_payload_fingerprint(
     """Canonical fingerprint of a received Remediation Plan payload."""
     return canonical_fingerprint(
         {
+            "plan_id": plan_id,
             "quality_run_id": quality_run_id,
             "candidate_fingerprint": candidate_fingerprint,
             "policy_fingerprint": policy_fingerprint,
@@ -41,6 +43,7 @@ def plan_payload_fingerprint(
 
 def evaluation_payload_fingerprint(
     *,
+    evaluation_id: str,
     plan_id: str | None,
     plan_fingerprint: str | None,
     passed: bool,
@@ -50,6 +53,7 @@ def evaluation_payload_fingerprint(
     """Canonical fingerprint of a received plan evaluation payload."""
     return canonical_fingerprint(
         {
+            "evaluation_id": evaluation_id,
             "plan_id": plan_id,
             "plan_fingerprint": plan_fingerprint,
             "passed": passed,
@@ -61,6 +65,7 @@ def evaluation_payload_fingerprint(
 
 def admission_payload_fingerprint(
     *,
+    admission_id: str,
     quality_run_id: str,
     plan_id: str,
     plan_fingerprint: str,
@@ -75,6 +80,7 @@ def admission_payload_fingerprint(
     """Canonical fingerprint of a received Apply Admission payload."""
     return canonical_fingerprint(
         {
+            "admission_id": admission_id,
             "quality_run_id": quality_run_id,
             "plan_id": plan_id,
             "plan_fingerprint": plan_fingerprint,
@@ -91,6 +97,7 @@ def admission_payload_fingerprint(
 
 def verify_plan_integrity(plan: RemediationPlan, *, refusing: str) -> None:
     expected = plan_payload_fingerprint(
+        plan_id=plan.plan_id,
         quality_run_id=plan.quality_run_id,
         candidate_fingerprint=plan.candidate_fingerprint,
         policy_fingerprint=plan.policy_fingerprint,
@@ -109,6 +116,7 @@ def verify_evaluation_integrity(
     if not fingerprint:
         raise PermissionError(f"Refusing {refusing}: evaluation has no immutable fingerprint")
     expected = evaluation_payload_fingerprint(
+        evaluation_id=evaluation.evaluation_id,
         plan_id=evaluation.plan_id,
         plan_fingerprint=evaluation.plan_fingerprint,
         passed=evaluation.passed,
@@ -134,6 +142,7 @@ def verify_admission_integrity(
     refusing: str,
 ) -> None:
     expected = admission_payload_fingerprint(
+        admission_id=admission.admission_id,
         quality_run_id=admission.quality_run_id,
         plan_id=admission.plan_id,
         plan_fingerprint=admission.plan_fingerprint,
