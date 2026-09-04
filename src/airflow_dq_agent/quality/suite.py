@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 import polars as pl
+from psycopg.errors import UndefinedTable
 from sqlalchemy.engine import Engine
 
 from airflow_dq_agent.contracts.models import (
@@ -62,14 +63,34 @@ def _jsonable(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns(casts) if casts else df
 
 
+def _is_undefined_table(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, UndefinedTable):
+            return True
+        orig = getattr(current, "orig", None)
+        if isinstance(orig, BaseException) and orig is not current:
+            current = orig
+            continue
+        current = current.__cause__
+    return False
+
+
 def load_frames(engine: Engine) -> dict[str, pl.DataFrame]:
     frames: dict[str, pl.DataFrame] = {}
-    with engine.connect() as conn:
-        for table in TABLES:
-            frames[table] = pl.read_database(
-                f"SELECT * FROM warehouse.{table}",
-                connection=conn,
-            )
+    for table in TABLES:
+        with engine.connect() as conn:
+            try:
+                frames[table] = pl.read_database(
+                    f"SELECT * FROM warehouse.{table}",
+                    connection=conn,
+                )
+            except Exception as exc:
+                if _is_undefined_table(exc):
+                    continue
+                raise
     return frames
 
 
