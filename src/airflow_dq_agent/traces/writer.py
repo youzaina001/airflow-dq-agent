@@ -193,6 +193,8 @@ def append_human_decision(
     *,
     plan_id: str | None = None,
     plan_fingerprint: str | None = None,
+    evaluation_id: str | None = None,
+    evaluation_fingerprint: str | None = None,
     directory: Path | None = None,
     dsn: str | None = None,
 ) -> AuditEvent:
@@ -203,6 +205,8 @@ def append_human_decision(
         predecessor,
         plan_id=plan_id,
         plan_fingerprint=plan_fingerprint,
+        evaluation_id=evaluation_id,
+        evaluation_fingerprint=evaluation_fingerprint,
     )
     append_event(event, directory=directory, dsn=dsn)
     return event

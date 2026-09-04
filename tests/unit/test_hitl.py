@@ -189,6 +189,8 @@ def test_approval_review_is_sample_free_and_names_the_executable_plan() -> None:
     assert review.policy_fingerprint == plan.policy_fingerprint
     assert review.quality_run_id == plan.quality_run_id
     assert review.evaluation_passed is True
+    assert review.evaluation_id == evaluation.evaluation_id
+    assert review.evaluation_fingerprint == evaluation.fingerprint
     assert {score.name for score in review.evaluation_scores} == {
         score.name for score in evaluation.scores
     }
@@ -202,7 +204,7 @@ def test_approval_review_is_sample_free_and_names_the_executable_plan() -> None:
     assert "recompile" in review.expiry_guidance.lower()
     assert "sample_failures" not in payload
     assert "params" not in payload
-    assert "9001" not in payload
+    assert '"order_id": 9001' not in payload
     assert "SHIPPPED" not in payload
 
     with pytest.raises(ValidationError):
@@ -251,8 +253,10 @@ def test_audited_approval_binds_the_shown_review_fingerprint() -> None:
         review_fingerprint=review.fingerprint,
     )
 
-    assert decision.fingerprint == review.fingerprint
-    assert events[0].decision_fingerprint == review.fingerprint
+    assert decision.review_fingerprint == review.fingerprint
+    assert decision.fingerprint != review.fingerprint
+    assert events[0].review_fingerprint == review.fingerprint
+    assert events[0].decision_fingerprint == decision.fingerprint
     assert events[0].plan_id == plan.plan_id
     assert events[0].plan_fingerprint == plan.fingerprint
     assert events[0].kind == "human_approved"
@@ -264,4 +268,6 @@ def test_dag_uses_sample_free_approval_review_body() -> None:
     assert "Evaluation passed. Approve the whole plan or reject it. A note is required." not in text
     assert "build_approval_review" in text
     assert "approval_review_body" in text
+    assert "review_event" in text
+    assert "review_event_id" in text
     assert "PostgresAuditRepository" in text

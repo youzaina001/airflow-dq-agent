@@ -68,10 +68,38 @@ def _verify_durable_approval(
         raise PermissionError(
             "Refusing admission: human decision fingerprint does not match received payload"
         )
+    if decision.fingerprint and decision.fingerprint != expected:
+        raise PermissionError(
+            "Refusing admission: human decision fingerprint does not match received payload"
+        )
+    if (
+        event.evaluation_id != evaluation.evaluation_id
+        or event.evaluation_fingerprint != evaluation.fingerprint
+    ):
+        raise PermissionError(
+            "Refusing admission: human decision does not belong to this evaluation"
+        )
     review = build_approval_review(plan, evaluation, ttl=ttl)
-    bound = decision.fingerprint
-    if not bound or bound != review.fingerprint:
+    bound = decision.review_fingerprint
+    if not bound or bound != review.fingerprint or event.review_fingerprint != review.fingerprint:
         raise PermissionError("Refusing admission: human decision does not bind the reviewed plan")
+    if not event.predecessor_ids:
+        raise PermissionError("Refusing admission: human decision has no reviewed predecessor")
+    predecessor = audit_repository.get(event.predecessor_ids[0])
+    if predecessor is None or predecessor.kind != "approval_review":
+        raise PermissionError("Refusing admission: approval review audit event was not found")
+    if (
+        predecessor.review_fingerprint != review.fingerprint
+        or predecessor.evaluation_id != evaluation.evaluation_id
+        or predecessor.evaluation_fingerprint != evaluation.fingerprint
+    ):
+        raise PermissionError(
+            "Refusing admission: approval review does not belong to this evaluation"
+        )
+    if evaluation.audit_event_id and predecessor.predecessor_ids != [evaluation.audit_event_id]:
+        raise PermissionError(
+            "Refusing admission: approval review does not belong to this evaluation"
+        )
     return audit_event_id
 
 

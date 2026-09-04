@@ -31,7 +31,7 @@ from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces import InMemoryAuditRepository
-from airflow_dq_agent.traces.lineage import apply_result_event, decision_event
+from airflow_dq_agent.traces.lineage import apply_result_event, decision_event, review_event
 
 
 class _RecordingConnection:
@@ -201,18 +201,21 @@ def _approved_quarantine_plan(
     )
     evaluation = evaluate_plan(plan)
     review = build_approval_review(plan, evaluation)
+    shown = review_event(review, evaluation, "evaluation-event-1")
     decision = HumanDecision(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
-        fingerprint=review.fingerprint,
+        review_fingerprint=review.fingerprint,
     )
     event = decision_event(
         plan.quality_run_id,
         decision,
-        "evaluation-event-1",
+        shown,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
     )
     admission = create_apply_admission(
         plan,
@@ -220,7 +223,7 @@ def _approved_quarantine_plan(
         decision.model_copy(update={"audit_event_id": event.event_id}),
         report=scoped,
         now=now,
-        audit_repository=InMemoryAuditRepository([event]),
+        audit_repository=InMemoryAuditRepository([shown, event]),
     )
     return plan, evaluation, admission, scoped
 
@@ -313,18 +316,21 @@ def test_apply_uses_each_governed_action_mutation_capability(
     )
     evaluation = evaluate_plan(plan)
     review = build_approval_review(plan, evaluation)
+    shown = review_event(review, evaluation, "evaluation-event-1")
     decision = HumanDecision(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
-        fingerprint=review.fingerprint,
+        review_fingerprint=review.fingerprint,
     )
     event = decision_event(
         plan.quality_run_id,
         decision,
-        "evaluation-event-1",
+        shown,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
     )
     admission = create_apply_admission(
         plan,
@@ -332,7 +338,7 @@ def test_apply_uses_each_governed_action_mutation_capability(
         decision.model_copy(update={"audit_event_id": event.event_id}),
         report=scoped_report,
         now=now,
-        audit_repository=InMemoryAuditRepository([event]),
+        audit_repository=InMemoryAuditRepository([shown, event]),
     )
     engine = _MutationRecordingEngine()
     monkeypatch.setattr(
