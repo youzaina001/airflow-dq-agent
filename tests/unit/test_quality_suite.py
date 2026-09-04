@@ -2,6 +2,8 @@ from datetime import date, datetime
 
 import polars as pl
 import pytest
+from psycopg.errors import UndefinedTable, UniqueViolation
+from sqlalchemy.exc import ProgrammingError
 
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts import CandidateAction, Proposal, QualityEvidence, TargetSet
@@ -10,6 +12,7 @@ from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.quality import run_suite_on_frames
 from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckSpec, get_check_spec
+from airflow_dq_agent.quality.suite import TABLES, load_frames
 
 
 def _contracted_frames() -> dict[str, pl.DataFrame]:
@@ -289,3 +292,54 @@ def test_type_error_in_check_logic_still_propagates(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(CheckSpec, "failed_rows", boom)
     with pytest.raises(TypeError, match="check logic bug"):
         run_suite_on_frames(_contracted_frames())
+
+
+class _StubConnection:
+    def __enter__(self) -> "_StubConnection":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+class _StubEngine:
+    def connect(self) -> _StubConnection:
+        return _StubConnection()
+
+
+def test_load_frames_omits_undefined_warehouse_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    available = _contracted_frames()
+
+    def fake_read(query: str, connection: object) -> pl.DataFrame:
+        table = query.rsplit(".", 1)[-1]
+        if table == "fact_orders":
+            raise ProgrammingError(
+                query,
+                {},
+                UndefinedTable('relation "warehouse.fact_orders" does not exist'),
+            )
+        return available[table]
+
+    monkeypatch.setattr(pl, "read_database", fake_read)
+
+    loaded = load_frames(_StubEngine())  # type: ignore[arg-type]
+    assert "fact_orders" not in loaded
+    assert set(loaded) == set(TABLES) - {"fact_orders"}
+
+    report = run_suite_on_frames(loaded)
+    drift = report.get("fact_orders.schema_drift")
+    assert drift is not None
+    assert drift.status == CheckStatus.FAIL
+    assert "missing table fact_orders" in drift.message
+    completeness = report.get("fact_orders.total_amount.completeness")
+    assert completeness is not None
+    assert completeness.status == CheckStatus.ERROR
+
+
+def test_load_frames_still_raises_other_database_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_read(query: str, connection: object) -> pl.DataFrame:
+        raise ProgrammingError(query, {}, UniqueViolation("duplicate key"))
+
+    monkeypatch.setattr(pl, "read_database", fake_read)
+    with pytest.raises(ProgrammingError, match="duplicate key"):
+        load_frames(_StubEngine())  # type: ignore[arg-type]
