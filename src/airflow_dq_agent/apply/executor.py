@@ -199,21 +199,23 @@ def _emit_apply_failed(
         result_fingerprint=_result_fingerprint(
             plan, admission, resolved_run_id, dry_run, result.steps
         ),
-        dry_run=True,
+        dry_run=dry_run,
         reasons=["controlled apply failed before a result could be admitted"],
-    ).model_copy(update={"kind": "apply_failed"})
+        failed=True,
+    )
     append_event(failure)
 
 
 def _export_supplementary_apply_event(sink: _AuditEventSink, event: AuditEvent) -> None:
-    """JSONL is not terminal apply authority; export faults must not emit apply_failed."""
     try:
         sink.append(event)
-    except OSError:
+    except Exception as exc:
+        # After commit; re-raising would invite Airflow to retry a mutation.
         logger.warning(
-            "supplementary jsonl export failed after committed apply event_id=%s kind=%s",
+            "supplementary jsonl export failed after committed apply event_id=%s kind=%s error=%s",
             event.event_id,
             event.kind,
+            type(exc).__name__,
         )
 
 
