@@ -23,7 +23,7 @@ from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.quality.registry import CHECK_SPECS
-from airflow_dq_agent.traces import InMemoryAuditRepository
+from airflow_dq_agent.traces import InMemoryAuditRepository, PostgresAuditRepository
 from airflow_dq_agent.traces.lineage import decision_event, quality_report_event
 
 
@@ -267,6 +267,65 @@ def test_approval_for_another_plan_or_run_cannot_create_apply_admission() -> Non
     ) as refused:
         create_apply_admission(plan, evaluation, decision, report=report, audit_repository=other_fp)
     _assert_refusal_is_safe(refused.value)
+
+
+def test_approval_with_mismatched_decision_id_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(plan, evaluation)
+    swapped = decision.model_copy(update={"decision_id": "forged-decision"})
+
+    with pytest.raises(PermissionError, match="does not match audit lineage") as refused:
+        create_apply_admission(
+            plan, evaluation, swapped, report=report, audit_repository=repository
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_approval_event_with_non_approve_outcome_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(plan, evaluation)
+    event = repository.get(decision.audit_event_id or "")
+    assert event is not None
+    lying = event.model_copy(update={"decision_outcome": "Reject"})
+
+    with pytest.raises(PermissionError, match="not a human approval") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            audit_repository=InMemoryAuditRepository([lying]),
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_postgres_audit_repository_returns_none_for_missing_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _EmptyResult:
+        def first(self) -> None:
+            return None
+
+    class _Connection:
+        def execute(self, statement: object, params: object = None) -> _EmptyResult:
+            del statement, params
+            return _EmptyResult()
+
+        def __enter__(self) -> object:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    class _Engine:
+        def connect(self) -> _Connection:
+            return _Connection()
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.traces.repository.make_engine", lambda *_a, **_k: _Engine()
+    )
+
+    assert PostgresAuditRepository("postgresql+psycopg://unused").get("decision-event-1") is None
 
 
 def test_approval_from_another_actor_cannot_create_apply_admission() -> None:
