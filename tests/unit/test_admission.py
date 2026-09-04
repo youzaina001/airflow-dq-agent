@@ -13,6 +13,7 @@ from airflow_dq_agent.contracts import (
     RemediationPlan,
     TargetSet,
 )
+from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
@@ -30,6 +31,9 @@ def _evaluated_plan() -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     failed = report.get("fact_orders.total_amount.completeness")
     assert failed is not None
     scoped_report = report.model_copy(update={"checks": [failed]})
+    scoped_report = scoped_report.model_copy(
+        update={"fingerprint": report_payload_fingerprint(scoped_report)}
+    )
     candidate = Proposal(
         summary="Quarantine failed rows.",
         root_cause_hypothesis="A required value was omitted.",

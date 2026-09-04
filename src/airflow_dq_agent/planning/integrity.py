@@ -6,7 +6,10 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from airflow_dq_agent.action_definitions import get_governed_action
-from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
+from airflow_dq_agent.contracts.fingerprints import (
+    canonical_fingerprint,
+    report_payload_fingerprint,
+)
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     EvalReport,
@@ -87,6 +90,18 @@ def admission_payload_fingerprint(
             "expires_at": expires_at,
         }
     )
+
+
+def verify_report_integrity(report: QualitySuiteReport, *, refusing: str) -> None:
+    """Recompute the received Quality Evidence payload against its durable fingerprint."""
+    fingerprint = report.fingerprint
+    if not fingerprint:
+        raise PermissionError(f"Refusing {refusing}: quality report has no immutable fingerprint")
+    expected = report_payload_fingerprint(report)
+    if expected != fingerprint:
+        raise PermissionError(
+            f"Refusing {refusing}: quality report fingerprint does not match received payload"
+        )
 
 
 def verify_plan_integrity(plan: RemediationPlan, *, refusing: str) -> None:
@@ -201,5 +216,5 @@ def verify_executable_params(
             raise PermissionError(f"Refusing {refusing}: item parameters do not match Check Policy")
     if not plan.blocked and covered != set(report_failures):
         raise PermissionError(
-            f"Refusing {refusing}: quality evidence is not a failed check in this quality run"
+            f"Refusing {refusing}: plan does not cover every failed check in this quality run"
         )

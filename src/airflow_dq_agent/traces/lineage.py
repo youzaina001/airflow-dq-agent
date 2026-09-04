@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
+from airflow_dq_agent.contracts.fingerprints import (
+    canonical_fingerprint,
+    report_payload_fingerprint,
+)
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     AuditEvent,
@@ -19,21 +22,7 @@ from airflow_dq_agent.contracts.models import (
 
 def _report_fingerprint(report: QualitySuiteReport) -> str:
     """Fingerprint quality results without storing samples or row values."""
-    return canonical_fingerprint(
-        {
-            "quality_run_id": report.run_id,
-            "checks": [
-                {
-                    "check_id": check.check_id,
-                    "contract_id": check.contract_id,
-                    "status": check.status,
-                    "n_failed": check.n_failed,
-                    "n_total": check.n_total,
-                }
-                for check in report.checks
-            ],
-        }
-    )
+    return report_payload_fingerprint(report)
 
 
 def _event(

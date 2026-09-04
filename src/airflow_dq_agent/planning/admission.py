@@ -16,6 +16,7 @@ from airflow_dq_agent.planning.integrity import (
     verify_evaluation_integrity,
     verify_executable_params,
     verify_plan_integrity,
+    verify_report_integrity,
 )
 
 
@@ -30,6 +31,7 @@ def create_apply_admission(
 ) -> ApplyAdmission:
     """Create admission only for one fresh, approved, fully executable plan."""
     issued_at = now or datetime.now(UTC)
+    verify_report_integrity(report, refusing="admission")
     verify_plan_integrity(plan, refusing="admission")
     if plan.blocked:
         raise PermissionError("Refusing admission: remediation plan is blocked")
