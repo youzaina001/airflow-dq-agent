@@ -41,8 +41,10 @@ def _verify_durable_approval(
     event = audit_repository.get(audit_event_id)
     if event is None or event.event_id != audit_event_id:
         raise PermissionError("Refusing admission: human decision audit event was not found")
-    if event.kind != "human_approved":
+    if event.kind != "human_approved" or event.decision_outcome != "Approve":
         raise PermissionError("Refusing admission: audit event is not a human approval")
+    if event.decision_id != decision.decision_id:
+        raise PermissionError("Refusing admission: human decision does not match audit lineage")
     if event.quality_run_id != plan.quality_run_id:
         raise PermissionError(
             "Refusing admission: human decision does not belong to this quality run"
