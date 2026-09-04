@@ -14,6 +14,8 @@ from typing import Any
 
 from airflow_dq_agent.contracts.models import QualitySuiteReport
 
+# Membership is the privacy classification; do not add a name without reviewing
+# row-sample / prompt / secret content.
 XCOM_REPORT_FIELDS: tuple[str, ...] = (
     "run_id",
     "report_id",
