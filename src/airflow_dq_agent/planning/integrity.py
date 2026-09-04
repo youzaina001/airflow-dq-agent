@@ -13,6 +13,7 @@ from airflow_dq_agent.contracts.models import (
     EvalScore,
     ExecutablePlanItem,
     NonExecutablePlanItem,
+    QualitySuiteReport,
     RemediationPlan,
 )
 from airflow_dq_agent.quality.registry import get_check_spec
@@ -160,22 +161,45 @@ def verify_admission_integrity(
         )
 
 
-def verify_executable_params(plan: RemediationPlan, *, refusing: str) -> None:
-    """Re-derive item parameters from Quality Evidence and Check Policy."""
+def verify_executable_params(
+    plan: RemediationPlan, *, report: QualitySuiteReport, refusing: str
+) -> None:
+    """Re-derive item parameters from originating Quality Evidence and Check Policy."""
+    if report.run_id != plan.quality_run_id:
+        raise PermissionError(
+            f"Refusing {refusing}: quality report does not belong to this remediation plan"
+        )
+    report_failures = {check.check_id: check for check in report.failed_checks}
+    covered: set[str] = set()
     for item in plan.items:
         if not isinstance(item, ExecutablePlanItem):
             continue
         try:
-            specs = [get_check_spec(evidence.check_id) for evidence in item.evidence]
-            if not specs:
+            if not item.evidence:
                 raise ValueError("executable item has no quality evidence")
+            specs = []
+            for evidence in item.evidence:
+                failed = report_failures.get(evidence.check_id)
+                if failed is None or failed.contract_id != evidence.contract_id:
+                    raise ValueError("evidence is not a failed check in this quality run")
+                spec = get_check_spec(evidence.check_id)
+                if spec.table != item.table or spec.contract_id != evidence.contract_id:
+                    raise ValueError("evidence does not match the contracted table")
+                if failed.table != item.table:
+                    raise ValueError("evidence does not match the contracted table")
+                specs.append(spec)
+                covered.add(evidence.check_id)
             action = get_governed_action(item.action_id)
             derived = action.derive_params(specs[0])
             if any(action.derive_params(spec) != derived for spec in specs[1:]):
                 raise ValueError("evidence requires incompatible controlled parameter values")
         except (KeyError, ValueError) as exc:
             raise PermissionError(
-                f"Refusing {refusing}: item parameters do not match Check Policy"
+                f"Refusing {refusing}: quality evidence is not a failed check in this quality run"
             ) from exc
         if derived != item.params:
             raise PermissionError(f"Refusing {refusing}: item parameters do not match Check Policy")
+    if not plan.blocked and covered != set(report_failures):
+        raise PermissionError(
+            f"Refusing {refusing}: quality evidence is not a failed check in this quality run"
+        )

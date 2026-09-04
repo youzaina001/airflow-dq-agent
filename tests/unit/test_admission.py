@@ -9,6 +9,7 @@ from airflow_dq_agent.contracts import (
     HumanDecision,
     Proposal,
     QualityEvidence,
+    QualitySuiteReport,
     RemediationPlan,
     TargetSet,
 )
@@ -24,7 +25,7 @@ class _TargetSets:
         return TargetSet(count=5, fingerprint="targets:orders-null-v1")
 
 
-def _evaluated_plan() -> tuple[RemediationPlan, EvalReport]:
+def _evaluated_plan() -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     report = seeded_failure_report()
     failed = report.get("fact_orders.total_amount.completeness")
     assert failed is not None
@@ -44,23 +45,24 @@ def _evaluated_plan() -> tuple[RemediationPlan, EvalReport]:
         confidence=0.9,
     )
     plan = compile_remediation_plan(scoped_report, candidate, target_sets=_TargetSets())
-    return plan, evaluate_plan(plan)
+    return plan, evaluate_plan(plan), scoped_report
 
 
 def test_unaudited_human_decision_cannot_create_apply_admission() -> None:
-    plan, evaluation = _evaluated_plan()
+    plan, evaluation, report = _evaluated_plan()
 
     with pytest.raises(PermissionError, match="human decision has no durable audit event"):
         create_apply_admission(
             plan,
             evaluation,
             HumanDecision(decision="Approve", actor="approver-1", note="Reviewed target set."),
+            report=report,
         )
 
 
 @pytest.mark.parametrize("audit_event_id", ["", " ", "\t\n"])
 def test_blank_audit_event_id_cannot_create_apply_admission(audit_event_id: str) -> None:
-    plan, evaluation = _evaluated_plan()
+    plan, evaluation, report = _evaluated_plan()
 
     with pytest.raises(PermissionError, match="human decision has no durable audit event"):
         create_apply_admission(
@@ -72,11 +74,12 @@ def test_blank_audit_event_id_cannot_create_apply_admission(audit_event_id: str)
                 note="Reviewed target set.",
                 audit_event_id=audit_event_id,
             ),
+            report=report,
         )
 
 
 def test_audited_approval_receives_time_bounded_apply_admission() -> None:
-    plan, evaluation = _evaluated_plan()
+    plan, evaluation, report = _evaluated_plan()
     now = datetime(2026, 8, 30, tzinfo=UTC)
 
     admission = create_apply_admission(
@@ -88,6 +91,7 @@ def test_audited_approval_receives_time_bounded_apply_admission() -> None:
             note="Reviewed target set.",
             audit_event_id="decision-event-1",
         ),
+        report=report,
         now=now,
         ttl=timedelta(hours=24),
     )
@@ -104,18 +108,19 @@ def test_audited_approval_receives_time_bounded_apply_admission() -> None:
             plan,
             evaluation,
             admission,
+            report=report,
             dry_run=False,
             now=admission.expires_at + timedelta(seconds=1),
         )
 
     with pytest.raises(PermissionError, match="requires an apply admission"):
-        apply_plan(plan, evaluation, dry_run=False)
+        apply_plan(plan, evaluation, report=report, dry_run=False)
 
 
 def test_policy_drift_blocks_mutation_before_a_database_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan, evaluation = _evaluated_plan()
+    plan, evaluation, report = _evaluated_plan()
     admission = create_apply_admission(
         plan,
         evaluation,
@@ -125,10 +130,11 @@ def test_policy_drift_blocks_mutation_before_a_database_connection(
             note="Reviewed target set.",
             audit_event_id="decision-event-1",
         ),
+        report=report,
     )
     check_id = "fact_orders.total_amount.completeness"
     spec = CHECK_SPECS[check_id]
     monkeypatch.setitem(CHECK_SPECS, check_id, spec.model_copy(update={"description": "drift"}))
 
     with pytest.raises(PermissionError, match="policy snapshot drifted"):
-        apply_plan(plan, evaluation, admission, dry_run=False)
+        apply_plan(plan, evaluation, admission, report=report, dry_run=False)

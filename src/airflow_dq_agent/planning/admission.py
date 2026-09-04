@@ -8,11 +8,13 @@ from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     EvalReport,
     HumanDecision,
+    QualitySuiteReport,
     RemediationPlan,
 )
 from airflow_dq_agent.planning.integrity import (
     admission_payload_fingerprint,
     verify_evaluation_integrity,
+    verify_executable_params,
     verify_plan_integrity,
 )
 
@@ -22,6 +24,7 @@ def create_apply_admission(
     evaluation: EvalReport,
     decision: HumanDecision,
     *,
+    report: QualitySuiteReport,
     now: datetime | None = None,
     ttl: timedelta = timedelta(hours=24),
 ) -> ApplyAdmission:
@@ -30,6 +33,7 @@ def create_apply_admission(
     verify_plan_integrity(plan, refusing="admission")
     if plan.blocked:
         raise PermissionError("Refusing admission: remediation plan is blocked")
+    verify_executable_params(plan, report=report, refusing="admission")
     if not evaluation.passed:
         raise PermissionError("Refusing admission: remediation-plan evaluation did not pass")
     evaluation_fingerprint = verify_evaluation_integrity(plan, evaluation, refusing="admission")

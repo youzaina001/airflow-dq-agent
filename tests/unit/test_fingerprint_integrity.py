@@ -14,11 +14,12 @@ from airflow_dq_agent.contracts.models import (
     HumanDecision,
     Proposal,
     QualityEvidence,
+    QualitySuiteReport,
     RemediationPlan,
     TargetSet,
 )
 from airflow_dq_agent.evals import evaluate_plan
-from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.planning import compile_remediation_plan, current_policy_fingerprint
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.integrity import (
     admission_payload_fingerprint,
@@ -96,7 +97,9 @@ def _decision() -> HumanDecision:
     )
 
 
-def _compile_evaluated(*check_actions: tuple[str, str]) -> tuple[RemediationPlan, EvalReport]:
+def _compile_evaluated(
+    *check_actions: tuple[str, str],
+) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     report = seeded_failure_report()
     checks = []
     actions = []
@@ -113,8 +116,9 @@ def _compile_evaluated(*check_actions: tuple[str, str]) -> tuple[RemediationPlan
                 rationale="Preserve source rows for review.",
             )
         )
+    scoped = report.model_copy(update={"checks": checks})
     plan = compile_remediation_plan(
-        report.model_copy(update={"checks": checks}),
+        scoped,
         Proposal(
             summary="Quarantine failed rows.",
             root_cause_hypothesis="A required value was omitted.",
@@ -125,7 +129,7 @@ def _compile_evaluated(*check_actions: tuple[str, str]) -> tuple[RemediationPlan
     )
     evaluation = evaluate_plan(plan)
     assert evaluation.passed
-    return plan, evaluation
+    return plan, evaluation, scoped
 
 
 def _first_item(plan: RemediationPlan) -> ExecutablePlanItem:
@@ -149,7 +153,7 @@ def _assert_refusal_is_safe(exc: BaseException) -> None:
 
 
 def test_evaluate_plan_refuses_mismatched_plan_fingerprint() -> None:
-    plan, _evaluation = _compile_evaluated(
+    plan, _evaluation, _report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
     item = _first_item(plan)
@@ -163,10 +167,10 @@ def test_evaluate_plan_refuses_mismatched_plan_fingerprint() -> None:
 def test_admission_and_apply_refuse_column_and_target_set_tamper(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
-    plan, evaluation = _compile_evaluated(
+    plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
     item = _first_item(plan)
     tampered_params = {**item.params, "column": "status"}
     tampered = _replace_first_item(
@@ -178,7 +182,7 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
     assert _first_item(tampered).params["column"] == "status"
 
     with pytest.raises(PermissionError, match="received payload") as admitted:
-        create_apply_admission(tampered, evaluation, _decision(), now=NOW)
+        create_apply_admission(tampered, evaluation, _decision(), now=NOW, report=report)
     _assert_refusal_is_safe(admitted.value)
 
     monkeypatch.setattr(
@@ -192,6 +196,7 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
             tampered,
             evaluation,
             admission,
+            report=report,
             dry_run=False,
             engine=engine,  # type: ignore[arg-type]
             now=NOW,
@@ -202,10 +207,67 @@ def test_admission_and_apply_refuse_column_and_target_set_tamper(
     assert 't."status" IS NULL' not in rendered
 
 
+def test_admission_and_apply_refuse_rehashed_plan_retargeting_catalogued_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    origin_plan, _origin_evaluation, origin_report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    other_plan, _other_evaluation, _other_report = _compile_evaluated(
+        ("dim_customer.email.validity", "quarantine_invalids")
+    )
+    stolen = _first_item(other_plan)
+    retargeted = origin_plan.model_copy(update={"items": [stolen]})
+    retargeted = retargeted.model_copy(
+        update={"policy_fingerprint": current_policy_fingerprint(retargeted)}
+    )
+    retargeted = retargeted.model_copy(
+        update={
+            "fingerprint": plan_payload_fingerprint(
+                quality_run_id=retargeted.quality_run_id,
+                candidate_fingerprint=retargeted.candidate_fingerprint,
+                policy_fingerprint=retargeted.policy_fingerprint,
+                items=retargeted.items,
+            )
+        }
+    )
+    evaluation = evaluate_plan(retargeted)
+    assert evaluation.passed
+    assert stolen.table == "dim_customer"
+    assert stolen.evidence[0].check_id == "dim_customer.email.validity"
+    assert stolen.params["column"] == "email"
+    assert retargeted.quality_run_id == origin_plan.quality_run_id
+    assert retargeted.fingerprint != origin_plan.fingerprint
+
+    with pytest.raises(PermissionError, match="quality") as admitted:
+        create_apply_admission(retargeted, evaluation, _decision(), now=NOW, report=origin_report)
+    _assert_refusal_is_safe(admitted.value)
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _ParamsDerivedTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine()
+    with pytest.raises(PermissionError, match="quality") as applied:
+        apply_plan(
+            retargeted,
+            evaluation,
+            report=origin_report,
+            dry_run=True,
+            engine=engine,  # type: ignore[arg-type]
+            now=NOW,
+            run_id="unit-rehash-retarget",
+        )
+    _assert_refusal_is_safe(applied.value)
+    rendered = " ".join(engine.transaction.connection.statements)
+    assert 't."email"' not in rendered
+
+
 def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
-    plan, evaluation = _compile_evaluated(
+    plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
     item = _first_item(plan)
@@ -232,7 +294,10 @@ def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
             )
         }
     )
-    admission = create_apply_admission(tampered, evaluation, _decision(), now=NOW)
+    with pytest.raises(PermissionError, match="Check Policy") as admitted:
+        create_apply_admission(tampered, evaluation, _decision(), now=NOW, report=report)
+    _assert_refusal_is_safe(admitted.value)
+
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
         _ParamsDerivedTargetResolver,
@@ -243,8 +308,8 @@ def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
         apply_plan(
             tampered,
             evaluation,
-            admission,
-            dry_run=False,
+            report=report,
+            dry_run=True,
             engine=engine,  # type: ignore[arg-type]
             now=NOW,
         )
@@ -334,13 +399,15 @@ _PLAN_EVAL_TAMPERS = _plan_eval_tampers()
     ids=[name for name, _ in _PLAN_EVAL_TAMPERS],
 )
 def test_admission_refuses_plan_and_evaluation_tampers(tamper: Any) -> None:
-    plan, evaluation = _compile_evaluated(
+    plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls"),
         ("fact_orders.status.validity", "quarantine_invalids"),
     )
     tampered_plan, tampered_evaluation = tamper(plan, evaluation)
     with pytest.raises(PermissionError, match="received payload") as refused:
-        create_apply_admission(tampered_plan, tampered_evaluation, _decision(), now=NOW)
+        create_apply_admission(
+            tampered_plan, tampered_evaluation, _decision(), now=NOW, report=report
+        )
     _assert_refusal_is_safe(refused.value)
 
 
@@ -352,11 +419,11 @@ def test_admission_refuses_plan_and_evaluation_tampers(tamper: Any) -> None:
 def test_apply_refuses_plan_and_evaluation_tampers(
     tamper: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
-    plan, evaluation = _compile_evaluated(
+    plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls"),
         ("fact_orders.status.validity", "quarantine_invalids"),
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
     tampered_plan, tampered_evaluation = tamper(plan, evaluation)
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
@@ -369,6 +436,7 @@ def test_apply_refuses_plan_and_evaluation_tampers(
             tampered_plan,
             tampered_evaluation,
             admission,
+            report=report,
             dry_run=False,
             engine=engine,  # type: ignore[arg-type]
             now=NOW,
@@ -380,10 +448,10 @@ def test_apply_refuses_plan_and_evaluation_tampers(
 def test_apply_refuses_decision_link_and_expiry_tampers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
-    plan, evaluation = _compile_evaluated(
+    plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
         _ParamsDerivedTargetResolver,
@@ -402,6 +470,7 @@ def test_apply_refuses_decision_link_and_expiry_tampers(
                 plan,
                 evaluation,
                 tampered,
+                report=report,
                 dry_run=False,
                 engine=engine,  # type: ignore[arg-type]
                 now=NOW,
@@ -411,10 +480,10 @@ def test_apply_refuses_decision_link_and_expiry_tampers(
 
 
 def test_plan_evaluation_and_admission_reject_unexpected_fields() -> None:
-    plan, evaluation = _compile_evaluated(
+    plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
     for model, payload in (
         (RemediationPlan, plan.model_dump(mode="json")),
         (EvalReport, evaluation.model_dump(mode="json")),
@@ -431,10 +500,10 @@ def test_plan_evaluation_and_admission_reject_unexpected_fields() -> None:
 
 
 def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
-    plan, evaluation = _compile_evaluated(
+    plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW)
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
     assert plan.fingerprint == plan_payload_fingerprint(
         quality_run_id=plan.quality_run_id,
         candidate_fingerprint=plan.candidate_fingerprint,

@@ -21,6 +21,7 @@ from airflow_dq_agent.contracts.models import (
     AuditEvent,
     EvalReport,
     ExecutablePlanItem,
+    QualitySuiteReport,
     RemediationPlan,
 )
 from airflow_dq_agent.planning import current_policy_fingerprint
@@ -58,6 +59,7 @@ def _require_plan_admission(
     evaluation: EvalReport,
     admission: ApplyAdmission,
     *,
+    report: QualitySuiteReport,
     now: datetime,
 ) -> None:
     if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
@@ -72,10 +74,12 @@ def _require_plan_admission(
     current_policy = current_policy_fingerprint(plan)
     if current_policy != plan.policy_fingerprint or current_policy != admission.policy_fingerprint:
         raise PermissionError("Refusing apply: policy snapshot drifted after admission")
-    verify_executable_params(plan, refusing="apply")
+    verify_executable_params(plan, report=report, refusing="apply")
 
 
-def _require_dry_run(plan: RemediationPlan, evaluation: EvalReport) -> None:
+def _require_dry_run(
+    plan: RemediationPlan, evaluation: EvalReport, *, report: QualitySuiteReport
+) -> None:
     if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
         raise PermissionError("Refusing dry run: remediation plan is blocked")
     if not evaluation.passed:
@@ -84,7 +88,7 @@ def _require_dry_run(plan: RemediationPlan, evaluation: EvalReport) -> None:
     verify_evaluation_integrity(plan, evaluation, refusing="dry run")
     if current_policy_fingerprint(plan) != plan.policy_fingerprint:
         raise PermissionError("Refusing dry run: policy snapshot drifted after evaluation")
-    verify_executable_params(plan, refusing="dry run")
+    verify_executable_params(plan, report=report, refusing="dry run")
 
 
 def _result_fingerprint(
@@ -172,6 +176,7 @@ def apply_plan(
     evaluation: EvalReport,
     admission: ApplyAdmission | None = None,
     *,
+    report: QualitySuiteReport,
     dry_run: bool = True,
     engine: Engine | None = None,
     dsn: str | None = None,
@@ -186,11 +191,11 @@ def apply_plan(
     """
     applied_at = now or datetime.now(UTC)
     if dry_run:
-        _require_dry_run(plan, evaluation)
+        _require_dry_run(plan, evaluation, report=report)
     else:
         if admission is None:
             raise PermissionError("Refusing apply: mutation requires an apply admission")
-        _require_plan_admission(plan, evaluation, admission, now=applied_at)
+        _require_plan_admission(plan, evaluation, admission, report=report, now=applied_at)
     database = engine or make_engine(dsn or get_settings().apply_dsn)
     resolved_run_id = run_id or uuid4().hex
     executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
@@ -217,7 +222,7 @@ def apply_plan(
             # Nested params dicts stay mutable; re-check immediately before render.
             refusing = "dry run" if dry_run else "apply"
             verify_plan_integrity(plan, refusing=refusing)
-            verify_executable_params(plan, refusing=refusing)
+            verify_executable_params(plan, report=report, refusing=refusing)
             for item in executable:
                 action = get_governed_action(item.action_id)
                 rendered = action.render(
