@@ -160,10 +160,18 @@ def apply_result_event(
     result_fingerprint: str,
     dry_run: bool,
     reasons: list[str] | None = None,
+    failed: bool = False,
 ) -> AuditEvent:
     """Build the terminal event body that dq_apply records atomically with mutation."""
+    kind: Literal["dry_run", "apply_succeeded", "apply_failed"]
+    if failed:
+        kind = "apply_failed"
+    elif dry_run:
+        kind = "dry_run"
+    else:
+        kind = "apply_succeeded"
     return _event(
-        "dry_run" if dry_run else "apply_succeeded",
+        kind,
         quality_run_id=plan.quality_run_id,
         predecessor_ids=[
             admission.decision_event_id

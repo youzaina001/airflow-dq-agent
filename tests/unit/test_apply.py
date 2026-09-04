@@ -8,7 +8,10 @@ import pytest
 import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.apply.executor import _set_controlled_transaction_mode, apply_plan
-from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
+from airflow_dq_agent.contracts.fingerprints import (
+    canonical_fingerprint,
+    report_payload_fingerprint,
+)
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     CandidateAction,
@@ -24,6 +27,7 @@ from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
+from airflow_dq_agent.traces.lineage import apply_result_event
 
 
 class _RecordingConnection:
@@ -374,8 +378,57 @@ def test_jsonl_fault_after_commit_keeps_terminal_apply_success(
     assert "apply_failed" not in recorded_kinds
     assert "apply_failed" not in sink_kinds
     assert "export" in caplog.text.lower()
+    assert "OSError" in caplog.text
+    assert "jsonl export fault" not in caplog.text
     assert "sample_failures" not in messages
     assert "root_cause_hypothesis" not in messages
+
+
+@pytest.mark.parametrize("fault_type", [OSError, ValueError])
+def test_default_jsonl_sink_fault_after_commit_keeps_apply_success(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    fault_type: type[Exception],
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission = _approved_quarantine_plan(now)
+    engine = _CommitTrackingEngine()
+    lineage: list[object] = []
+    appended_after_commit: list[bool] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    def _boom(self: object, event: object) -> None:
+        del event
+        appended_after_commit.append(engine.transaction.committed)
+        raise fault_type("jsonl export fault")
+
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.JsonlAuditSink.append", _boom)
+
+    with caplog.at_level(logging.WARNING, logger="airflow_dq_agent.apply.executor"):
+        result = apply_plan(
+            plan,
+            evaluation,
+            admission,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            run_id="unit-jsonl-default-sink-fault",
+        )
+
+    assert result.dry_run is False
+    assert result.fingerprint
+    assert engine.transaction.committed
+    assert appended_after_commit == [True]
+    assert lineage == []
+    assert fault_type.__name__ in caplog.text
+    assert "jsonl export fault" not in caplog.text
+    assert "sample_failures" not in caplog.text
 
 
 def test_pre_commit_apply_failure_still_emits_apply_failed(
@@ -385,6 +438,7 @@ def test_pre_commit_apply_failure_still_emits_apply_failed(
     plan, evaluation, admission = _approved_quarantine_plan(now)
     engine = _CommitTrackingEngine()
     lineage: list[object] = []
+    factory_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _LockBoomResolver
     )
@@ -392,6 +446,12 @@ def test_pre_commit_apply_failure_still_emits_apply_failed(
         "airflow_dq_agent.apply.executor.append_event",
         lambda event, **_: lineage.append(event),
     )
+
+    def _spy(*args: object, **kwargs: object) -> object:
+        factory_calls.append((args, kwargs))
+        return apply_result_event(*args, **kwargs)
+
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.apply_result_event", _spy)
 
     with pytest.raises(RuntimeError, match="lock failed before mutation"):
         apply_plan(
@@ -410,12 +470,19 @@ def test_pre_commit_apply_failure_still_emits_apply_failed(
     assert not engine.transaction.committed
     assert apply_records == []
     assert lineage_kinds == ["apply_failed"]
+    assert len(factory_calls) == 1
+    _, kwargs = factory_calls[0]
+    assert kwargs["dry_run"] is False
+    assert kwargs["failed"] is True
     failure = lineage[0]
     body = json.dumps(failure.model_dump(mode="json"))  # type: ignore[attr-defined]
     assert "sample_failures" not in body
     assert getattr(failure, "reasons", []) == [
         "controlled apply failed before a result could be admitted"
     ]
+    assert failure.fingerprint == canonical_fingerprint(  # type: ignore[attr-defined]
+        failure.model_dump(mode="json", exclude={"fingerprint"})  # type: ignore[attr-defined]
+    )
 
 
 def test_apply_uses_a_serializable_snapshot_before_target_locking() -> None:
