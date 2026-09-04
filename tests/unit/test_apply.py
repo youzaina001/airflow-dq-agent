@@ -19,6 +19,7 @@ from airflow_dq_agent.contracts.models import (
     HumanDecision,
     Proposal,
     QualityEvidence,
+    QualitySuiteReport,
     RemediationPlan,
     TargetSet,
 )
@@ -168,12 +169,14 @@ class _LockBoomResolver:
 
 def _approved_quarantine_plan(
     now: datetime,
-) -> tuple[RemediationPlan, EvalReport, ApplyAdmission]:
+) -> tuple[RemediationPlan, EvalReport, ApplyAdmission, QualitySuiteReport]:
     report = seeded_failure_report()
     failed = report.get("fact_orders.total_amount.completeness")
     assert failed is not None
+    scoped = report.model_copy(update={"checks": [failed]})
+    scoped = scoped.model_copy(update={"fingerprint": report_payload_fingerprint(scoped)})
     plan = compile_remediation_plan(
-        report.model_copy(update={"checks": [failed]}),
+        scoped,
         Proposal(
             summary="Quarantine rows with missing totals.",
             root_cause_hypothesis="The source omitted a required value.",
@@ -200,9 +203,10 @@ def _approved_quarantine_plan(
             note="Reviewed target set.",
             audit_event_id="decision-event-1",
         ),
+        report=scoped,
         now=now,
     )
-    return plan, evaluation, admission
+    return plan, evaluation, admission, scoped
 
 
 def test_dry_run_retains_applied_steps_on_the_result(
@@ -333,7 +337,7 @@ def test_jsonl_fault_after_commit_keeps_terminal_apply_success(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     now = datetime(2026, 8, 30, tzinfo=UTC)
-    plan, evaluation, admission = _approved_quarantine_plan(now)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
     engine = _CommitTrackingEngine()
     sink = _JsonlFaultAfterCommit(engine.transaction)
     lineage: list[object] = []
@@ -350,6 +354,7 @@ def test_jsonl_fault_after_commit_keeps_terminal_apply_success(
             plan,
             evaluation,
             admission,
+            report=report,
             dry_run=False,
             engine=engine,  # type: ignore[arg-type]
             now=now,
@@ -391,7 +396,7 @@ def test_default_jsonl_sink_fault_after_commit_keeps_apply_success(
     fault_type: type[Exception],
 ) -> None:
     now = datetime(2026, 8, 30, tzinfo=UTC)
-    plan, evaluation, admission = _approved_quarantine_plan(now)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
     engine = _CommitTrackingEngine()
     lineage: list[object] = []
     appended_after_commit: list[bool] = []
@@ -415,6 +420,7 @@ def test_default_jsonl_sink_fault_after_commit_keeps_apply_success(
             plan,
             evaluation,
             admission,
+            report=report,
             dry_run=False,
             engine=engine,  # type: ignore[arg-type]
             now=now,
@@ -435,7 +441,7 @@ def test_pre_commit_apply_failure_still_emits_apply_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime(2026, 8, 30, tzinfo=UTC)
-    plan, evaluation, admission = _approved_quarantine_plan(now)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
     engine = _CommitTrackingEngine()
     lineage: list[object] = []
     factory_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
@@ -458,6 +464,7 @@ def test_pre_commit_apply_failure_still_emits_apply_failed(
             plan,
             evaluation,
             admission,
+            report=report,
             dry_run=False,
             engine=engine,  # type: ignore[arg-type]
             now=now,
