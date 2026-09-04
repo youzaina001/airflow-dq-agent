@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -43,7 +44,7 @@ def _parse_proposal(proposal: Proposal | dict[str, Any]) -> tuple[Proposal | Non
             0.0,
             1.0,
             "Candidate Proposal does not satisfy the Pydantic output contract.",
-            errors=exc.errors(include_url=False),
+            errors=exc.errors(include_url=False, include_input=False),
         )
     return parsed, _score(
         "schema_validity", 1.0, 1.0, "Candidate Proposal satisfies the Pydantic output contract."
@@ -211,7 +212,9 @@ def evaluate_plan(plan: RemediationPlan) -> EvalReport:
     scores = [compilation, policy, targets]
     blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
     passed = not blocked
+    evaluation_id = uuid4().hex
     fingerprint = evaluation_payload_fingerprint(
+        evaluation_id=evaluation_id,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
         passed=passed,
@@ -219,6 +222,7 @@ def evaluate_plan(plan: RemediationPlan) -> EvalReport:
         blocked_reasons=blocked,
     )
     return EvalReport(
+        evaluation_id=evaluation_id,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
         fingerprint=fingerprint,
