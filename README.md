@@ -123,8 +123,10 @@ errors, replay errors, malformed output, failed evaluations, rejected approvals,
 expired admissions fail closed.
 
 The v1 remediation catalog is deliberately small. Quarantine actions copy affected rows
-into `dq.quarantine_rows`; they do not delete source rows. `null_fill` is registered but
-unavailable until a reviewed Check Policy supplies both a target rule and fill value.
+into `dq.quarantine_rows`; they do not delete source rows. `dq.quarantine_rows.payload`
+copies source rows and is not covered by sample-free XCom or Audit Lineage guarantees.
+`null_fill` is registered but unavailable until a reviewed Check Policy supplies both a
+target rule and fill value.
 Every executable plan item records the exact primary-key target count and fingerprint.
 Apply recomputes and locks the same set in its transaction; target drift, policy drift,
 or an expired admission aborts the operation.
@@ -144,7 +146,7 @@ channels persist data, and none carries row samples or model-authored narrative:
 
 | Channel | Written by | Contents |
 | --- | --- | --- |
-| Airflow XCom | `run_suite_task` via `sample_free_report`; `propose_task` via `safe_proposal_for_xcom` | Sanitized report fields and bounded proposal authority identifiers—never `sample_failures`, sampled values, or model-authored text |
+| Airflow XCom | `run_suite_task` via `sample_free_report`; `propose_task` via `safe_proposal_for_xcom` | Allow-listed report fields and bounded proposal authority identifiers—never `sample_failures`, sampled values, unknown fields, or model-authored text |
 | JSONL traces | `JsonlAuditSink` | Minimized `AuditEvent` lineage bodies (IDs, fingerprints, counts, reasons) |
 | Postgres audit | `PostgresAuditSink` | The same `AuditEvent` bodies plus per-check `dq.check_runs` rows with counts only |
 

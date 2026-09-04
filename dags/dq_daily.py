@@ -46,8 +46,8 @@ def dq_daily() -> None:
     @task
     def run_suite_task() -> dict[str, Any]:
         # XCom is durable storage, like JSONL and Postgres audit lineage. The
-        # report crosses this boundary sample-free: sample_failures never enters
-        # Airflow metadata, while IDs, counts, messages, and observed columns do.
+        # report crosses this boundary through an allow-list of named fields:
+        # IDs, counts, messages, and observed columns; never sample_failures.
         return sample_free_report(run_quality_suite(settings.read_dsn or settings.warehouse_dsn))
 
     @task
