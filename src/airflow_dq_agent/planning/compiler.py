@@ -177,11 +177,15 @@ def compile_remediation_plan(
     )
     candidate_fingerprint = canonical_fingerprint(candidate)
     plan_id = uuid4().hex
-    bound_environment_id = (
-        warehouse_environment_id
-        if warehouse_environment_id is not None
-        else environment_id_from_dsn(get_settings().warehouse_dsn)
-    )
+    if warehouse_environment_id is not None:
+        bound_environment_id = warehouse_environment_id
+    else:
+        inferred = getattr(target_sets, "warehouse_environment_id", None)
+        bound_environment_id = (
+            inferred
+            if isinstance(inferred, str) and inferred
+            else environment_id_from_dsn(get_settings().warehouse_dsn)
+        )
     plan_fingerprint = plan_payload_fingerprint(
         plan_id=plan_id,
         quality_run_id=report.run_id,
