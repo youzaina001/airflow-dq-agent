@@ -202,7 +202,13 @@ class ExecutablePlanItem(BaseModel):
     @field_validator("params")
     @classmethod
     def freeze_params(cls, value: Mapping[str, Any]) -> MappingProxyType[str, Any]:
-        return MappingProxyType(dict(value))
+        frozen: dict[str, Any] = {}
+        for key, item in dict(value).items():
+            if isinstance(item, list):
+                frozen[key] = tuple(item)
+            else:
+                frozen[key] = item
+        return MappingProxyType(frozen)
 
     @field_serializer("params")
     def serialize_params(self, value: Mapping[str, Any]) -> dict[str, Any]:

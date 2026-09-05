@@ -35,10 +35,12 @@ from airflow_dq_agent.planning.integrity import (
     decision_payload_fingerprint,
     evaluation_payload_fingerprint,
     plan_payload_fingerprint,
+    verify_plan_integrity,
     warehouse_environment_id,
 )
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
+from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces import InMemoryAuditRepository
 from airflow_dq_agent.traces.lineage import decision_event, quality_report_event, review_event
 
@@ -880,6 +882,30 @@ def test_fingerprinted_plan_rejects_in_place_authority_container_writes() -> Non
     with suppress(TypeError, AttributeError):
         plan.items.append(item)
     assert_authority_unchanged()
+
+
+def test_fingerprinted_plan_does_not_share_nested_param_containers_with_check_policy() -> None:
+    plan, _evaluation, _report = _compile_evaluated(
+        ("fact_orders.order_nk.uniqueness", "dedupe_keep_min_pk")
+    )
+    item = _first_item(plan)
+    stored_fingerprint = plan.fingerprint
+    policy_keys = CHECK_SPECS["fact_orders.order_nk.uniqueness"].rule_for("dedupe_keep_min_pk")
+    assert policy_keys is not None
+    catalog_keys = policy_keys.parameters["business_key"]
+    assert catalog_keys == ["customer_sk", "order_ts"]
+    nested = item.params["business_key"]
+    assert nested == ("customer_sk", "order_ts") or list(nested) == ["customer_sk", "order_ts"]
+
+    with suppress(TypeError, AttributeError):
+        nested.append("forged_col")  # type: ignore[union-attr]
+    with suppress(TypeError, AttributeError):
+        nested[0] = "forged_col"  # type: ignore[index]
+
+    assert catalog_keys == ["customer_sk", "order_ts"]
+    assert list(item.params["business_key"]) == ["customer_sk", "order_ts"]
+    verify_plan_integrity(plan, refusing="admission")
+    assert plan.fingerprint == stored_fingerprint
 
 
 def test_governed_artifacts_reject_unexpected_fields() -> None:
