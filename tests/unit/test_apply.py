@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.engine import make_url
 
 import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
@@ -27,6 +28,7 @@ from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
+from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces.lineage import apply_result_event
 
@@ -51,8 +53,9 @@ class _RecordingTransaction:
 
 
 class _RecordingEngine:
-    def __init__(self) -> None:
+    def __init__(self, dsn: str = "postgresql+psycopg://dq:dq@localhost:5433/warehouse") -> None:
         self.transaction = _RecordingTransaction()
+        self.url = make_url(dsn)
 
     def begin(self) -> _RecordingTransaction:
         return self.transaction
@@ -61,6 +64,26 @@ class _RecordingEngine:
 class _TargetSets:
     def resolve(self, **_: object) -> TargetSet:
         return TargetSet(count=5, fingerprint="targets:orders-null-v1")
+
+
+def _audited_approval() -> HumanDecision:
+    decision = HumanDecision(
+        decision="Approve",
+        actor="approver-1",
+        note="Reviewed target set.",
+        audit_event_id="decision-event-1",
+    )
+    return decision.model_copy(
+        update={
+            "fingerprint": decision_payload_fingerprint(
+                decision_id=decision.decision_id,
+                decision=decision.decision,
+                actor=decision.actor,
+                note=decision.note,
+                decided_at=decision.decided_at,
+            )
+        }
+    )
 
 
 class _MatchingTargetResolver:
@@ -95,8 +118,9 @@ class _MutationRecordingTransaction:
 
 
 class _MutationRecordingEngine:
-    def __init__(self) -> None:
+    def __init__(self, dsn: str = "postgresql+psycopg://dq:dq@localhost:5433/warehouse") -> None:
         self.transaction = _MutationRecordingTransaction()
+        self.url = make_url(dsn)
 
     def begin(self) -> _MutationRecordingTransaction:
         return self.transaction
@@ -133,8 +157,9 @@ class _CommitTrackingTransaction:
 
 
 class _CommitTrackingEngine:
-    def __init__(self) -> None:
+    def __init__(self, dsn: str = "postgresql+psycopg://dq:dq@localhost:5433/warehouse") -> None:
         self.transaction = _CommitTrackingTransaction()
+        self.url = make_url(dsn)
 
     def begin(self) -> _CommitTrackingTransaction:
         return self.transaction
@@ -197,12 +222,7 @@ def _approved_quarantine_plan(
     admission = create_apply_admission(
         plan,
         evaluation,
-        HumanDecision(
-            decision="Approve",
-            actor="approver-1",
-            note="Reviewed target set.",
-            audit_event_id="decision-event-1",
-        ),
+        _audited_approval(),
         report=scoped,
         now=now,
     )
@@ -299,12 +319,7 @@ def test_apply_uses_each_governed_action_mutation_capability(
     admission = create_apply_admission(
         plan,
         evaluation,
-        HumanDecision(
-            decision="Approve",
-            actor="approver-1",
-            note="Reviewed target set.",
-            audit_event_id="decision-event-1",
-        ),
+        _audited_approval(),
         report=scoped_report,
         now=now,
     )

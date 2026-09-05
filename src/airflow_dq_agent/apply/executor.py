@@ -34,6 +34,9 @@ from airflow_dq_agent.planning.integrity import (
     verify_plan_integrity,
     verify_report_integrity,
 )
+from airflow_dq_agent.planning.integrity import (
+    warehouse_environment_id as environment_id_from_dsn,
+)
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.traces.lineage import apply_result_event
 from airflow_dq_agent.traces.writer import JsonlAuditSink, append_event
@@ -61,6 +64,42 @@ class ApplyResult(BaseModel):
     plan_id: str | None = None
     admission_id: str | None = None
     steps: list[AppliedStep] = Field(default_factory=list)
+
+
+def _resolve_apply_warehouse_environment_id(
+    *,
+    warehouse_environment_id: str | None,
+    dsn: str | None,
+    engine: Engine | None,
+) -> str:
+    if warehouse_environment_id is not None:
+        return warehouse_environment_id
+    if dsn is not None:
+        return environment_id_from_dsn(dsn)
+    url = getattr(engine, "url", None) if engine is not None else None
+    if url is not None:
+        return environment_id_from_dsn(str(url))
+    settings = get_settings()
+    return environment_id_from_dsn(settings.apply_dsn or settings.warehouse_dsn)
+
+
+def _require_apply_warehouse_environment(
+    plan: RemediationPlan,
+    admission: ApplyAdmission,
+    *,
+    warehouse_environment_id: str | None,
+    dsn: str | None,
+    engine: Engine | None,
+) -> None:
+    applied = _resolve_apply_warehouse_environment_id(
+        warehouse_environment_id=warehouse_environment_id,
+        dsn=dsn,
+        engine=engine,
+    )
+    if applied != plan.warehouse_environment_id or applied != admission.warehouse_environment_id:
+        raise PermissionError(
+            "Refusing apply: apply connection is a different warehouse/environment"
+        )
 
 
 def _require_plan_admission(
@@ -228,6 +267,7 @@ def apply_plan(
     dry_run: bool = True,
     engine: Engine | None = None,
     dsn: str | None = None,
+    warehouse_environment_id: str | None = None,
     run_id: str | None = None,
     now: datetime | None = None,
     audit_sink: _AuditEventSink | None = None,
@@ -245,6 +285,13 @@ def apply_plan(
         if admission is None:
             raise PermissionError("Refusing apply: mutation requires an apply admission")
         _require_plan_admission(plan, evaluation, admission, report=report, now=applied_at)
+        _require_apply_warehouse_environment(
+            plan,
+            admission,
+            warehouse_environment_id=warehouse_environment_id,
+            dsn=dsn,
+            engine=engine,
+        )
     database = engine or make_engine(dsn or get_settings().apply_dsn)
     resolved_run_id = run_id or uuid4().hex
     executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
@@ -270,7 +317,6 @@ def apply_plan(
                     raise PermissionError(
                         "Refusing apply: controlled target set changed after plan compilation"
                     )
-            # Nested params dicts stay mutable; re-check immediately before render.
             refusing = "dry run" if dry_run else "apply"
             verify_plan_integrity(plan, refusing=refusing)
             verify_executable_params(plan, report=report, refusing=refusing)

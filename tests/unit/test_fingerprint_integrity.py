@@ -1,12 +1,16 @@
+from collections.abc import Mapping
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.engine import make_url
 
 from airflow_dq_agent.apply.executor import apply_plan
 from airflow_dq_agent.contracts.fingerprints import (
     canonical_fingerprint,
+    canonical_json,
     report_payload_fingerprint,
 )
 from airflow_dq_agent.contracts.models import (
@@ -27,11 +31,13 @@ from airflow_dq_agent.planning import compile_remediation_plan, current_policy_f
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.integrity import (
     admission_payload_fingerprint,
+    decision_payload_fingerprint,
     evaluation_payload_fingerprint,
     plan_payload_fingerprint,
+    warehouse_environment_id,
 )
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
-from airflow_dq_agent.traces.lineage import quality_report_event
+from airflow_dq_agent.traces.lineage import decision_event, quality_report_event
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 
@@ -41,7 +47,7 @@ class _TargetSets:
         return TargetSet(count=5, fingerprint="targets:orders-null-v1")
 
 
-def _target_set_from_received_params(params: dict[str, object]) -> TargetSet:
+def _target_set_from_received_params(params: Mapping[str, object]) -> TargetSet:
     column = str(params.get("column", "unknown"))
     return TargetSet(count=len(column), fingerprint=f"targets:from-params:{column}")
 
@@ -54,7 +60,7 @@ class _ParamsDerivedTargetResolver:
 
     def _resolve(self, item: object) -> TargetSet:
         params = getattr(item, "params", {})
-        if not isinstance(params, dict):
+        if not isinstance(params, Mapping):
             params = {}
         return _target_set_from_received_params(params)
 
@@ -86,24 +92,49 @@ class _RecordingTransaction:
 
 
 class _RecordingEngine:
-    def __init__(self) -> None:
+    def __init__(self, dsn: str = "postgresql+psycopg://dq:dq@localhost:5433/warehouse") -> None:
         self.transaction = _RecordingTransaction()
+        self.url = make_url(dsn)
 
     def begin(self) -> _RecordingTransaction:
         return self.transaction
 
 
+class _MatchingTargetResolver:
+    def __init__(self, **_: object) -> None:
+        pass
+
+    def resolve_item(self, _: object, item: object) -> TargetSet:
+        return item.target_set  # type: ignore[union-attr]
+
+    def lock_and_resolve(self, _: object, item: object) -> TargetSet:
+        return item.target_set  # type: ignore[union-attr]
+
+
 def _decision() -> HumanDecision:
-    return HumanDecision(
+    decision = HumanDecision(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
         audit_event_id="decision-event-1",
     )
+    return decision.model_copy(
+        update={
+            "fingerprint": decision_payload_fingerprint(
+                decision_id=decision.decision_id,
+                decision=decision.decision,
+                actor=decision.actor,
+                note=decision.note,
+                decided_at=decision.decided_at,
+            )
+        }
+    )
 
 
 def _compile_evaluated_from(
-    report: QualitySuiteReport, *check_actions: tuple[str, str]
+    report: QualitySuiteReport,
+    *check_actions: tuple[str, str],
+    warehouse_environment_id: str | None = None,
 ) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     checks = []
     actions = []
@@ -131,6 +162,7 @@ def _compile_evaluated_from(
             confidence=0.9,
         ),
         target_sets=_TargetSets(),
+        warehouse_environment_id=warehouse_environment_id,
     )
     evaluation = evaluate_plan(plan)
     assert evaluation.passed
@@ -139,8 +171,13 @@ def _compile_evaluated_from(
 
 def _compile_evaluated(
     *check_actions: tuple[str, str],
+    warehouse_environment_id: str | None = None,
 ) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
-    return _compile_evaluated_from(seeded_failure_report(), *check_actions)
+    return _compile_evaluated_from(
+        seeded_failure_report(),
+        *check_actions,
+        warehouse_environment_id=warehouse_environment_id,
+    )
 
 
 def _first_item(plan: RemediationPlan) -> ExecutablePlanItem:
@@ -280,6 +317,7 @@ def test_admission_and_apply_refuse_rehashed_plan_retargeting_catalogued_check(
                 quality_run_id=retargeted.quality_run_id,
                 candidate_fingerprint=retargeted.candidate_fingerprint,
                 policy_fingerprint=retargeted.policy_fingerprint,
+                warehouse_environment_id=retargeted.warehouse_environment_id,
                 items=retargeted.items,
             )
         }
@@ -332,6 +370,7 @@ def test_apply_refuses_params_not_derived_from_check_policy_even_after_rehash(
                 quality_run_id=tampered.quality_run_id,
                 candidate_fingerprint=tampered.candidate_fingerprint,
                 policy_fingerprint=tampered.policy_fingerprint,
+                warehouse_environment_id=tampered.warehouse_environment_id,
                 items=tampered.items,
             )
         }
@@ -389,12 +428,12 @@ def _plan_eval_tampers() -> list[tuple[str, Any]]:
         return (
             _replace_first_item(
                 plan,
-                evidence=[
+                evidence=(
                     QualityEvidence(
                         check_id="fact_orders.status.validity",
                         contract_id="warehouse.fact_orders",
-                    )
-                ],
+                    ),
+                ),
             ),
             evaluation,
         )
@@ -648,6 +687,7 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
         quality_run_id=plan.quality_run_id,
         candidate_fingerprint=plan.candidate_fingerprint,
         policy_fingerprint=plan.policy_fingerprint,
+        warehouse_environment_id=plan.warehouse_environment_id,
         items=plan.items,
     )
     assert evaluation.fingerprint == evaluation_payload_fingerprint(
@@ -668,6 +708,7 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
         decision_id=admission.decision_id,
         decision_event_id=admission.decision_event_id,
         policy_fingerprint=admission.policy_fingerprint,
+        warehouse_environment_id=admission.warehouse_environment_id,
         issued_at=admission.issued_at,
         expires_at=admission.expires_at,
     )
@@ -677,11 +718,71 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
             "quality_run_id": plan.quality_run_id,
             "candidate_fingerprint": plan.candidate_fingerprint,
             "policy_fingerprint": plan.policy_fingerprint,
+            "warehouse_environment_id": plan.warehouse_environment_id,
             "items": [item.model_dump(mode="json") for item in plan.items],
         }
     )
     assert report.fingerprint == report_payload_fingerprint(report)
     assert quality_report_event(report).report_fingerprint == report.fingerprint
+    decision = _decision()
+    assert decision.fingerprint == decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
+    )
+    unfingerprinted = decision.model_copy(update={"fingerprint": None})
+    assert (
+        decision_event(plan.quality_run_id, unfingerprinted, "predecessor-1").decision_fingerprint
+        == decision.fingerprint
+    )
+
+
+def test_fingerprinted_plan_rejects_in_place_authority_container_writes() -> None:
+    plan, _evaluation, _report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    item = _first_item(plan)
+    stored_fingerprint = plan.fingerprint
+    original_column = item.params["column"]
+    original_evidence = tuple(item.evidence)
+    original_items = tuple(plan.items)
+
+    def assert_authority_unchanged() -> None:
+        assert item.params["column"] == original_column
+        assert item.params["column"] != "status"
+        assert tuple(item.evidence) == original_evidence
+        assert tuple(plan.items) == original_items
+        assert plan.fingerprint == stored_fingerprint
+        assert (
+            plan_payload_fingerprint(
+                plan_id=plan.plan_id,
+                quality_run_id=plan.quality_run_id,
+                candidate_fingerprint=plan.candidate_fingerprint,
+                policy_fingerprint=plan.policy_fingerprint,
+                warehouse_environment_id=plan.warehouse_environment_id,
+                items=plan.items,
+            )
+            == stored_fingerprint
+        )
+
+    with suppress(TypeError, AttributeError):
+        item.params["column"] = "status"
+    assert_authority_unchanged()
+
+    with suppress(TypeError, AttributeError):
+        item.evidence.append(
+            QualityEvidence(
+                check_id="fact_orders.status.validity",
+                contract_id="warehouse.fact_orders",
+            )
+        )
+    assert_authority_unchanged()
+
+    with suppress(TypeError, AttributeError):
+        plan.items.append(item)
+    assert_authority_unchanged()
 
 
 def test_governed_artifacts_reject_unexpected_fields() -> None:
@@ -704,3 +805,104 @@ def test_governed_artifacts_reject_unexpected_fields() -> None:
     ):
         with pytest.raises(ValidationError):
             model.model_validate({**payload, "unexpected_authority": "forged"})
+
+
+def test_apply_refuses_mutation_when_apply_connection_is_a_different_warehouse_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    plan, evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls"),
+        warehouse_environment_id="staging.example:5432/warehouse",
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    assert plan.warehouse_environment_id == "staging.example:5432/warehouse"
+    assert admission.warehouse_environment_id == "staging.example:5432/warehouse"
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _MatchingTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine("postgresql+psycopg://dq:dq@prod.example:5432/warehouse")
+    with pytest.raises(PermissionError, match="warehouse/environment") as refused:
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=NOW,
+            run_id="unit-warehouse-mismatch",
+        )
+    _assert_refusal_is_safe(refused.value)
+    assert engine.transaction.connection.statements == []
+
+
+def test_apply_accepts_same_warehouse_environment_with_a_different_connection_role(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    plan, evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    assert plan.warehouse_environment_id == "localhost:5433/warehouse"
+    assert admission.warehouse_environment_id == plan.warehouse_environment_id
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _MatchingTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine(
+        "postgresql+psycopg://apply_role:other-secret@localhost:5433/warehouse"
+    )
+    result = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=NOW,
+        run_id="unit-warehouse-role",
+    )
+    assert result.steps
+    assert engine.transaction.connection.statements
+
+
+def test_plan_and_admission_fingerprint_payloads_omit_dsn_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "s3cret-password"
+    secret_dsn = f"postgresql+psycopg://reader:{secret}@localhost:5433/warehouse"
+    monkeypatch.setenv("WAREHOUSE_DSN", secret_dsn)
+    assert warehouse_environment_id(secret_dsn) == "localhost:5433/warehouse"
+    assert secret not in warehouse_environment_id(secret_dsn)
+    assert warehouse_environment_id("postgresql+psycopg://") == ":/"
+
+    captured: list[object] = []
+    original = canonical_fingerprint
+
+    def _capture(value: object) -> str:
+        captured.append(value)
+        return original(value)
+
+    monkeypatch.setattr("airflow_dq_agent.planning.integrity.canonical_fingerprint", _capture)
+
+    plan, evaluation, report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    payload_json = canonical_json(captured)
+    artifacts_json = canonical_json(
+        [plan.model_dump(mode="json"), admission.model_dump(mode="json")]
+    )
+
+    assert plan.warehouse_environment_id == "localhost:5433/warehouse"
+    assert admission.warehouse_environment_id == "localhost:5433/warehouse"
+    assert secret not in plan.warehouse_environment_id
+    assert secret not in payload_json
+    assert secret not in artifacts_json
+    assert "reader" not in plan.warehouse_environment_id
+    assert plan.warehouse_environment_id in payload_json
