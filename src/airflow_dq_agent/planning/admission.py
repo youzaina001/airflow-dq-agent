@@ -14,6 +14,7 @@ from airflow_dq_agent.contracts.models import (
 )
 from airflow_dq_agent.planning.integrity import (
     admission_payload_fingerprint,
+    decision_payload_fingerprint,
     verify_evaluation_integrity,
     verify_executable_params,
     verify_plan_integrity,
@@ -47,6 +48,20 @@ def create_apply_admission(
     audit_event_id = decision.audit_event_id
     if not audit_event_id or not audit_event_id.strip():
         raise PermissionError("Refusing admission: human decision has no durable audit event")
+    decision_fingerprint = decision.fingerprint
+    if not decision_fingerprint or not decision_fingerprint.strip():
+        raise PermissionError("Refusing admission: human decision has no immutable fingerprint")
+    expected = decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
+    )
+    if expected != decision_fingerprint:
+        raise PermissionError(
+            "Refusing admission: human decision fingerprint does not match received payload"
+        )
     expires_at = issued_at + ttl
     admission_id = uuid4().hex
     fingerprint = admission_payload_fingerprint(
@@ -59,6 +74,7 @@ def create_apply_admission(
         decision_id=decision.decision_id,
         decision_event_id=audit_event_id,
         policy_fingerprint=plan.policy_fingerprint,
+        warehouse_environment_id=plan.warehouse_environment_id,
         issued_at=issued_at,
         expires_at=expires_at,
     )
@@ -72,6 +88,7 @@ def create_apply_admission(
         decision_id=decision.decision_id,
         decision_event_id=audit_event_id,
         policy_fingerprint=plan.policy_fingerprint,
+        warehouse_environment_id=plan.warehouse_environment_id,
         issued_at=issued_at,
         expires_at=expires_at,
         fingerprint=fingerprint,

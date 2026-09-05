@@ -18,6 +18,7 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
+from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
 
 
 def _report_fingerprint(report: QualitySuiteReport) -> str:
@@ -129,14 +130,12 @@ def decision_event(
         "Reject": "human_rejected",
         "Timeout": "human_timed_out",
     }.get(decision.decision, "human_rejected")
-    decision_fingerprint = decision.fingerprint or canonical_fingerprint(
-        {
-            "decision_id": decision.decision_id,
-            "decision": decision.decision,
-            "actor": decision.actor,
-            "note": decision.note,
-            "decided_at": decision.decided_at,
-        }
+    decision_fingerprint = decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
     )
     return _event(
         kind,  # type: ignore[arg-type]

@@ -50,7 +50,12 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
         create_apply_admission(plan, evaluation, decision, report=report)
 
     decision_audit_event = append_human_decision(report.run_id, evaluation_audit_event, decision)
-    audited_decision = decision.model_copy(update={"audit_event_id": decision_audit_event.event_id})
+    audited_decision = decision.model_copy(
+        update={
+            "audit_event_id": decision_audit_event.event_id,
+            "fingerprint": decision_audit_event.decision_fingerprint,
+        }
+    )
     admission = create_apply_admission(
         plan,
         evaluation,

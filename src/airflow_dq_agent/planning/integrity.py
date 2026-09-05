@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
+from sqlalchemy.engine import make_url
+
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts.fingerprints import (
     canonical_fingerprint,
@@ -24,12 +26,22 @@ from airflow_dq_agent.quality.registry import get_check_spec
 PlanItem = ExecutablePlanItem | NonExecutablePlanItem
 
 
+def warehouse_environment_id(dsn: str) -> str:
+    """Stable non-secret warehouse identity: host:port/database."""
+    url = make_url(dsn)
+    host = url.host or ""
+    port = "" if url.port is None else str(url.port)
+    database = url.database or ""
+    return f"{host}:{port}/{database}"
+
+
 def plan_payload_fingerprint(
     *,
     plan_id: str,
     quality_run_id: str,
     candidate_fingerprint: str,
     policy_fingerprint: str,
+    warehouse_environment_id: str,
     items: Sequence[PlanItem],
 ) -> str:
     """Canonical fingerprint of a received Remediation Plan payload."""
@@ -39,6 +51,7 @@ def plan_payload_fingerprint(
             "quality_run_id": quality_run_id,
             "candidate_fingerprint": candidate_fingerprint,
             "policy_fingerprint": policy_fingerprint,
+            "warehouse_environment_id": warehouse_environment_id,
             "items": [item.model_dump(mode="json") for item in items],
         }
     )
@@ -66,6 +79,26 @@ def evaluation_payload_fingerprint(
     )
 
 
+def decision_payload_fingerprint(
+    *,
+    decision_id: str,
+    decision: str,
+    actor: str,
+    note: str | None,
+    decided_at: datetime,
+) -> str:
+    """Canonical fingerprint of a received Human Decision payload."""
+    return canonical_fingerprint(
+        {
+            "decision_id": decision_id,
+            "decision": decision,
+            "actor": actor,
+            "note": note,
+            "decided_at": decided_at,
+        }
+    )
+
+
 def admission_payload_fingerprint(
     *,
     admission_id: str,
@@ -77,6 +110,7 @@ def admission_payload_fingerprint(
     decision_id: str,
     decision_event_id: str,
     policy_fingerprint: str,
+    warehouse_environment_id: str,
     issued_at: datetime,
     expires_at: datetime,
 ) -> str:
@@ -92,6 +126,7 @@ def admission_payload_fingerprint(
             "decision_id": decision_id,
             "decision_event_id": decision_event_id,
             "policy_fingerprint": policy_fingerprint,
+            "warehouse_environment_id": warehouse_environment_id,
             "issued_at": issued_at,
             "expires_at": expires_at,
         }
@@ -116,6 +151,7 @@ def verify_plan_integrity(plan: RemediationPlan, *, refusing: str) -> None:
         quality_run_id=plan.quality_run_id,
         candidate_fingerprint=plan.candidate_fingerprint,
         policy_fingerprint=plan.policy_fingerprint,
+        warehouse_environment_id=plan.warehouse_environment_id,
         items=plan.items,
     )
     if expected != plan.fingerprint:
@@ -166,6 +202,7 @@ def verify_admission_integrity(
         decision_id=admission.decision_id,
         decision_event_id=admission.decision_event_id,
         policy_fingerprint=admission.policy_fingerprint,
+        warehouse_environment_id=admission.warehouse_environment_id,
         issued_at=admission.issued_at,
         expires_at=admission.expires_at,
     )
@@ -179,6 +216,7 @@ def verify_admission_integrity(
         or admission.quality_run_id != plan.quality_run_id
         or admission.evaluation_id != evaluation.evaluation_id
         or admission.evaluation_fingerprint != evaluation.fingerprint
+        or admission.warehouse_environment_id != plan.warehouse_environment_id
     ):
         raise PermissionError(
             f"Refusing {refusing}: admission does not authorize this evaluated plan"

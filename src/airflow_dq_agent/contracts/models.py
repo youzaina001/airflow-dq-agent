@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 
 class Dimension(StrEnum):
@@ -193,9 +195,18 @@ class ExecutablePlanItem(BaseModel):
     action_id: str = Field(min_length=1)
     table: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
-    evidence: list[QualityEvidence] = Field(min_length=1)
+    evidence: tuple[QualityEvidence, ...] = Field(min_length=1)
     target_set: TargetSet
     policy_fingerprint: str = Field(min_length=1)
+
+    @field_validator("params")
+    @classmethod
+    def freeze_params(cls, value: Mapping[str, Any]) -> MappingProxyType[str, Any]:
+        return MappingProxyType(dict(value))
+
+    @field_serializer("params")
+    def serialize_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(value)
 
 
 class NonExecutablePlanItem(BaseModel):
@@ -203,7 +214,7 @@ class NonExecutablePlanItem(BaseModel):
 
     kind: Literal["non_executable"] = "non_executable"
     item_id: str = Field(min_length=1)
-    evidence: list[QualityEvidence] = Field(min_length=1)
+    evidence: tuple[QualityEvidence, ...] = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 
@@ -222,9 +233,10 @@ class RemediationPlan(BaseModel):
     quality_run_id: str = Field(min_length=1)
     candidate_fingerprint: str = Field(min_length=1)
     policy_fingerprint: str = Field(min_length=1)
-    items: list[PlanItem]
+    items: tuple[PlanItem, ...]
     blocked: bool
     blocked_reasons: list[str] = Field(default_factory=list)
+    warehouse_environment_id: str = Field(min_length=1)
     fingerprint: str = Field(min_length=1)
     compiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -243,6 +255,7 @@ class ApplyAdmission(BaseModel):
     decision_id: str = Field(min_length=1)
     decision_event_id: str = Field(min_length=1)
     policy_fingerprint: str = Field(min_length=1)
+    warehouse_environment_id: str = Field(min_length=1)
     issued_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime
     fingerprint: str = Field(min_length=1)
