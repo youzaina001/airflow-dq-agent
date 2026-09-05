@@ -391,6 +391,7 @@ def test_audited_approval_of_the_shown_review_receives_time_bounded_apply_admiss
             "params_input": {"approval_note": "Reviewed target set."},
             "responded_by_user": {"id": "approver-1"},
             "timedout": False,
+            "responded_at": "2026-08-29T12:00:00Z",
         },
         approver_ids={"approver-1"},
         quality_run_id=plan.quality_run_id,
@@ -486,6 +487,70 @@ def test_apply_admission_ttl_starts_from_the_human_decision() -> None:
             ttl=timedelta(hours=24),
             audit_repository=repository,
         )
+
+
+def test_future_human_decision_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    ttl = timedelta(hours=24)
+    issued_at = datetime(2026, 9, 1, tzinfo=UTC)
+    future, future_repo = _bound_approval(
+        plan, evaluation, decided_at=datetime(2026, 9, 2, tzinfo=UTC)
+    )
+
+    with pytest.raises(PermissionError, match="after admission time") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            future,
+            report=report,
+            now=issued_at,
+            ttl=ttl,
+            audit_repository=future_repo,
+        )
+    _assert_refusal_is_safe(refused.value)
+
+    on_time, on_time_repo = _bound_approval(plan, evaluation, decided_at=issued_at)
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        on_time,
+        report=report,
+        now=issued_at,
+        ttl=ttl,
+        audit_repository=on_time_repo,
+    )
+    assert admission.expires_at == issued_at + ttl
+
+    stale, stale_repo = _bound_approval(plan, evaluation, decided_at=issued_at - timedelta(days=30))
+    with pytest.raises(PermissionError, match="expired") as stale_refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            stale,
+            report=report,
+            now=issued_at,
+            ttl=ttl,
+            audit_repository=stale_repo,
+        )
+    _assert_refusal_is_safe(stale_refused.value)
+
+
+def test_thirty_day_old_human_decision_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decided_at = datetime(2026, 8, 1, tzinfo=UTC)
+    decision, repository = _bound_approval(plan, evaluation, decided_at=decided_at)
+
+    with pytest.raises(PermissionError, match="expired") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            now=decided_at + timedelta(days=30),
+            ttl=timedelta(hours=24),
+            audit_repository=repository,
+        )
+    _assert_refusal_is_safe(refused.value)
 
 
 def test_policy_drift_blocks_mutation_before_a_database_connection(
