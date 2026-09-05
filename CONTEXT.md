@@ -33,7 +33,7 @@ The immutable association from a quality suite report through its remediation pl
 _Avoid_: Log, history
 
 **Apply Admission**:
-The durable authorization to execute one evaluated remediation plan after its whole-plan human decision. It cannot authorize a different plan or report.
+The durable, single-use authorization to execute one evaluated remediation plan after its whole-plan human decision. It cannot authorize a different plan or report, and it cannot be consumed twice.
 _Avoid_: Approval, permission
 
 **Human Decision**:

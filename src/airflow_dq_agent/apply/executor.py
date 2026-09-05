@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from airflow_dq_agent.action_definitions import (
     RenderedStep,
@@ -102,6 +103,15 @@ def _require_apply_warehouse_environment(
         )
 
 
+def _refuse_consumed_admission(connection: object, admission: ApplyAdmission) -> None:
+    consumed = connection.execute(  # type: ignore[attr-defined]
+        text("SELECT dq.admission_consumed(:admission_id)"),
+        {"admission_id": admission.admission_id},
+    ).scalar()
+    if consumed:
+        raise PermissionError("Refusing apply: apply admission has already been consumed")
+
+
 def _require_plan_admission(
     plan: RemediationPlan,
     evaluation: EvalReport,
@@ -109,6 +119,7 @@ def _require_plan_admission(
     *,
     report: QualitySuiteReport,
     now: datetime,
+    connection: object | None = None,
 ) -> None:
     if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
         raise PermissionError("Refusing apply: remediation plan is blocked")
@@ -124,6 +135,8 @@ def _require_plan_admission(
     if current_policy != plan.policy_fingerprint or current_policy != admission.policy_fingerprint:
         raise PermissionError("Refusing apply: policy snapshot drifted after admission")
     verify_executable_params(plan, report=report, refusing="apply")
+    if connection is not None:
+        _refuse_consumed_admission(connection, admission)
 
 
 def _require_dry_run(
@@ -307,6 +320,16 @@ def apply_plan(
     try:
         with database.begin() as connection:
             _set_controlled_transaction_mode(connection, dry_run=dry_run)
+            if not dry_run:
+                assert admission is not None
+                _require_plan_admission(
+                    plan,
+                    evaluation,
+                    admission,
+                    report=report,
+                    now=applied_at,
+                    connection=connection,
+                )
             for item in executable:
                 actual_targets = (
                     resolver.resolve_item(connection, item)
@@ -353,9 +376,14 @@ def apply_plan(
             result.audit_event_id = event.event_id
             if not dry_run:
                 assert admission is not None
-                _record_apply_result(
-                    connection, event=event, result=result, plan=plan, admission=admission
-                )
+                try:
+                    _record_apply_result(
+                        connection, event=event, result=result, plan=plan, admission=admission
+                    )
+                except IntegrityError as exc:
+                    raise PermissionError(
+                        "Refusing apply: apply admission has already been consumed"
+                    ) from exc
         if dry_run:
             assert event is not None
             append_event(event)
