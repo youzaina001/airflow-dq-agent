@@ -516,6 +516,26 @@ def get_governed_action(action_id: str) -> GovernedAction:
     return _GOVERNED_ACTIONS[action_id]
 
 
+def _assert_check_policies_are_bindable() -> None:
+    from airflow_dq_agent.quality import registry as quality_registry
+
+    allowed = get_governed_action("dedupe_keep_min_pk").metadata.allowed_tables
+    shipped_tables = getattr(quality_registry, "DEDUPE_KEEP_MIN_PK_TABLES", None)
+    if shipped_tables is not None and shipped_tables != allowed:
+        raise ValueError(
+            "uniqueness Check Policy tables drifted from dedupe_keep_min_pk allowed_tables"
+        )
+    check_specs = getattr(quality_registry, "CHECK_SPECS", None)
+    if not check_specs:
+        return
+    for spec in check_specs.values():
+        for policy in spec.policies:
+            get_governed_action(policy.action_id).derive_params(spec)
+
+
+_assert_check_policies_are_bindable()
+
+
 def list_remediation_actions() -> tuple[RemediationAction, ...]:
     """Return the metadata for every governed remediation action."""
     return tuple(action.metadata for action in _GOVERNED_ACTIONS.values())

@@ -233,9 +233,19 @@ def verify_executable_params(
         )
     report_failures = {check.check_id: check for check in report.failed_checks}
     covered: set[str] = set()
+    seen_identities: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
     for item in plan.items:
         if not isinstance(item, ExecutablePlanItem):
             continue
+        identity = (
+            item.action_id,
+            tuple(sorted((evidence.check_id, evidence.contract_id) for evidence in item.evidence)),
+        )
+        if identity in seen_identities:
+            raise PermissionError(
+                f"Refusing {refusing}: duplicate executable action and quality evidence"
+            )
+        seen_identities.add(identity)
         try:
             if not item.evidence:
                 raise ValueError("executable item has no quality evidence")

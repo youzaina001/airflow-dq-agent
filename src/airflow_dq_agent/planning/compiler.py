@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from typing import Protocol
 from uuid import uuid4
@@ -95,6 +96,12 @@ def _blocked_item(
     )
 
 
+def candidate_action_identity(action: CandidateAction) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """Identity used to refuse duplicate (action_id, Quality Evidence) requests."""
+    evidence = tuple(sorted((item.check_id, item.contract_id) for item in action.evidence))
+    return (action.action_id, evidence)
+
+
 def compile_remediation_plan(
     report: object,
     candidate: Proposal,
@@ -115,9 +122,28 @@ def compile_remediation_plan(
     report_failures = {check.check_id: check.contract_id for check in report.failed_checks}
     items: list[ExecutablePlanItem | NonExecutablePlanItem] = []
     covered: set[str] = set()
+    duplicate_identities = {
+        identity
+        for identity, count in Counter(
+            candidate_action_identity(requested) for requested in candidate.candidate_actions
+        ).items()
+        if count > 1
+    }
 
     for index, requested in enumerate(candidate.candidate_actions):
         evidence = list(requested.evidence)
+        if candidate_action_identity(requested) in duplicate_identities:
+            items.append(
+                _blocked_item(
+                    index=index,
+                    evidence=evidence,
+                    reason="duplicate candidate action and quality evidence",
+                )
+            )
+            covered.update(
+                entry.check_id for entry in evidence if entry.check_id in report_failures
+            )
+            continue
         try:
             evidence, specs = _validated_evidence(report.run_id, requested, report_failures)
             if any(spec.rule_for(requested.action_id) is None for spec in specs):
