@@ -65,6 +65,7 @@ def _bound_approval(
     actor: str = "approver-1",
     note: str = "Reviewed target set.",
     ttl: timedelta = timedelta(hours=24),
+    decided_at: datetime | None = None,
     quality_run_id: str | None = None,
     plan_id: str | None = None,
     plan_fingerprint: str | None = None,
@@ -73,14 +74,17 @@ def _bound_approval(
 ) -> tuple[HumanDecision, InMemoryAuditRepository]:
     review = build_approval_review(plan, evaluation, ttl=ttl)
     shown = review_event(review, evaluation, "evaluation-event-1")
-    decision = HumanDecision(
-        decision=outcome,
-        actor=actor,
-        note=note,
-        review_fingerprint=review_fingerprint
-        if review_fingerprint is not None
-        else review.fingerprint,
-    )
+    decision_kwargs: dict[str, object] = {
+        "decision": outcome,
+        "actor": actor,
+        "note": note,
+        "review_fingerprint": review.fingerprint
+        if review_fingerprint is None
+        else review_fingerprint,
+    }
+    if decided_at is not None:
+        decision_kwargs["decided_at"] = decided_at
+    decision = HumanDecision(**decision_kwargs)  # type: ignore[arg-type]
     event = decision_event(
         quality_run_id or plan.quality_run_id,
         decision,
@@ -387,6 +391,7 @@ def test_audited_approval_of_the_shown_review_receives_time_bounded_apply_admiss
             "params_input": {"approval_note": "Reviewed target set."},
             "responded_by_user": {"id": "approver-1"},
             "timedout": False,
+            "responded_at": "2026-08-29T12:00:00Z",
         },
         approver_ids={"approver-1"},
         quality_run_id=plan.quality_run_id,
@@ -413,7 +418,7 @@ def test_audited_approval_of_the_shown_review_receives_time_bounded_apply_admiss
     assert admission.plan_fingerprint == plan.fingerprint
     assert admission.policy_fingerprint == plan.policy_fingerprint
     assert admission.decision_event_id == decision.audit_event_id
-    assert admission.expires_at == now + timedelta(hours=24)
+    assert admission.expires_at == decision.decided_at + timedelta(hours=24)
     assert admission.fingerprint
     assert decision.review_fingerprint == review.fingerprint
     assert decision.fingerprint != review.fingerprint
@@ -433,6 +438,119 @@ def test_audited_approval_of_the_shown_review_receives_time_bounded_apply_admiss
 
     with pytest.raises(PermissionError, match="requires an apply admission"):
         apply_plan(plan, evaluation, report=report, dry_run=False)
+
+
+def test_approval_with_rewritten_decided_at_cannot_extend_admission_ttl() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decided_at = datetime(2026, 8, 29, 12, tzinfo=UTC)
+    decision, repository = _bound_approval(plan, evaluation, decided_at=decided_at)
+    stretched = decision.model_copy(update={"decided_at": datetime(2026, 8, 30, 12, tzinfo=UTC)})
+
+    with pytest.raises(PermissionError, match="fingerprint does not match") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            stretched,
+            report=report,
+            now=datetime(2026, 8, 30, tzinfo=UTC),
+            ttl=timedelta(hours=24),
+            audit_repository=repository,
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_apply_admission_ttl_starts_from_the_human_decision() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decided_at = datetime(2026, 8, 29, 12, tzinfo=UTC)
+    issued_at = datetime(2026, 8, 30, tzinfo=UTC)
+    decision, repository = _bound_approval(plan, evaluation, decided_at=decided_at)
+
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        decision,
+        report=report,
+        now=issued_at,
+        ttl=timedelta(hours=24),
+        audit_repository=repository,
+    )
+
+    assert admission.issued_at == issued_at
+    assert admission.expires_at == decided_at + timedelta(hours=24)
+    with pytest.raises(PermissionError, match="expired"):
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            now=decided_at + timedelta(hours=24, seconds=1),
+            ttl=timedelta(hours=24),
+            audit_repository=repository,
+        )
+
+
+def test_future_human_decision_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    ttl = timedelta(hours=24)
+    issued_at = datetime(2026, 9, 1, tzinfo=UTC)
+    future, future_repo = _bound_approval(
+        plan, evaluation, decided_at=datetime(2026, 9, 2, tzinfo=UTC)
+    )
+
+    with pytest.raises(PermissionError, match="after admission time") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            future,
+            report=report,
+            now=issued_at,
+            ttl=ttl,
+            audit_repository=future_repo,
+        )
+    _assert_refusal_is_safe(refused.value)
+
+    on_time, on_time_repo = _bound_approval(plan, evaluation, decided_at=issued_at)
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        on_time,
+        report=report,
+        now=issued_at,
+        ttl=ttl,
+        audit_repository=on_time_repo,
+    )
+    assert admission.expires_at == issued_at + ttl
+
+    stale, stale_repo = _bound_approval(plan, evaluation, decided_at=issued_at - timedelta(days=30))
+    with pytest.raises(PermissionError, match="expired") as stale_refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            stale,
+            report=report,
+            now=issued_at,
+            ttl=ttl,
+            audit_repository=stale_repo,
+        )
+    _assert_refusal_is_safe(stale_refused.value)
+
+
+def test_thirty_day_old_human_decision_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decided_at = datetime(2026, 8, 1, tzinfo=UTC)
+    decision, repository = _bound_approval(plan, evaluation, decided_at=decided_at)
+
+    with pytest.raises(PermissionError, match="expired") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            now=decided_at + timedelta(days=30),
+            ttl=timedelta(hours=24),
+            audit_repository=repository,
+        )
+    _assert_refusal_is_safe(refused.value)
 
 
 def test_policy_drift_blocks_mutation_before_a_database_connection(
