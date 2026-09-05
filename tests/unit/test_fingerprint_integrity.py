@@ -992,7 +992,7 @@ def test_compile_binds_warehouse_identity_from_target_resolver_when_unspecified(
         ("fact_orders.total_amount.completeness", "quarantine_nulls"),
         target_sets=_EngineBoundResolver(),
     )
-    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    admission = _admit(plan, evaluation, report, now=NOW)
     assert plan.warehouse_environment_id == "ci-pg.example:55432/warehouse"
     assert admission.warehouse_environment_id == plan.warehouse_environment_id
     assert "s3cret" not in plan.warehouse_environment_id
