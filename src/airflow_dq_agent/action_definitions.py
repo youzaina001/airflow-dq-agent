@@ -278,7 +278,7 @@ def _render_dedupe(
     action: RemediationAction, contract: TableContract, params: dict[str, Any], run_id: str
 ) -> RenderedStep:
     business_key = params["business_key"]
-    keys = business_key if isinstance(business_key, list) else [business_key]
+    keys = business_key if isinstance(business_key, (list, tuple)) else [business_key]
     quoted_keys = ", ".join(f"s.{_quote(str(column))}" for column in keys)
     pk = _quote(str(params["pk_column"]))
     table = _qualified(contract)
