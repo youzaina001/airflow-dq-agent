@@ -319,6 +319,7 @@ class ApprovalReviewItem(BaseModel):
     target_count: int = Field(ge=0)
     target_fingerprint: str = Field(min_length=1)
     mutates: bool
+    reversible: bool
 
 
 class ApprovalReviewScore(BaseModel):

@@ -39,18 +39,22 @@ def build_approval_review(
 ) -> ApprovalReview:
     """Build the canonical sample-free payload a human reviews before deciding."""
     ttl_hours = _ttl_hours(ttl)
-    items = [
-        ApprovalReviewItem(
-            action_id=item.action_id,
-            table=item.table,
-            evidence_check_ids=[evidence.check_id for evidence in item.evidence],
-            target_count=item.target_set.count,
-            target_fingerprint=item.target_set.fingerprint,
-            mutates=get_governed_action(item.action_id).mutates,
+    items = []
+    for item in plan.items:
+        if not isinstance(item, ExecutablePlanItem):
+            continue
+        action = get_governed_action(item.action_id)
+        items.append(
+            ApprovalReviewItem(
+                action_id=item.action_id,
+                table=item.table,
+                evidence_check_ids=[evidence.check_id for evidence in item.evidence],
+                target_count=item.target_set.count,
+                target_fingerprint=item.target_set.fingerprint,
+                mutates=action.mutates,
+                reversible=action.metadata.reversible,
+            )
         )
-        for item in plan.items
-        if isinstance(item, ExecutablePlanItem)
-    ]
     scores = [
         ApprovalReviewScore(
             name=score.name,
@@ -100,8 +104,11 @@ def render_approval_review_body(review: ApprovalReview) -> str:
         lines.append("- none")
     for item in review.items:
         mutates = "yes" if item.mutates else "no"
+        reversible = "yes" if item.reversible else "no"
         checks = ", ".join(item.evidence_check_ids)
-        lines.append(f"- {item.action_id} on {item.table}; mutates={mutates}")
+        lines.append(
+            f"- {item.action_id} on {item.table}; mutates={mutates}; reversible={reversible}"
+        )
         lines.append(f"  Quality Evidence: {checks}")
         lines.append(
             "  Remediation Target Set "

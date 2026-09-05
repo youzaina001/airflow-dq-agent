@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from airflow_dq_agent.contracts import (
     RemediationPlan,
     TargetSet,
 )
+from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.hitl import (
     audit_approval_decision,
@@ -200,6 +202,7 @@ def test_approval_review_is_sample_free_and_names_the_executable_plan() -> None:
     assert item.target_count == 5
     assert item.target_fingerprint == "targets:orders-null-v1"
     assert item.mutates is True
+    assert item.reversible is True
     assert review.admission_ttl_hours == 24
     assert "recompile" in review.expiry_guidance.lower()
     assert "sample_failures" not in payload
@@ -225,12 +228,35 @@ def test_approval_review_body_renders_the_canonical_payload() -> None:
     assert "count=5" in body
     assert "targets:orders-null-v1" in body
     assert "mutates=yes" in body
+    assert "reversible=yes" in body
     assert "Evaluation: passed" in body
     assert "Apply Admission TTL: 24 hours" in body
     assert "Approve the whole plan or reject it. A note is required." in body
     assert "sample_failures" not in body
     assert "9001" not in body
     assert "SHIPPPED" not in body
+
+
+def test_approval_review_fingerprint_changes_when_reversible_flips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, evaluation = _evaluated_plan()
+    honest = build_approval_review(plan, evaluation)
+    assert honest.items[0].reversible is True
+
+    action = get_governed_action("quarantine_nulls")
+    flipped_action = replace(
+        action, metadata=action.metadata.model_copy(update={"reversible": False})
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.planning.review.get_governed_action",
+        lambda action_id: flipped_action if action_id == "quarantine_nulls" else get_governed_action(action_id),
+    )
+    flipped = build_approval_review(plan, evaluation)
+
+    assert flipped.items[0].reversible is False
+    assert flipped.fingerprint != honest.fingerprint
+    assert "sample_failures" not in json.dumps(flipped.model_dump(mode="json"))
 
 
 def test_audited_approval_binds_the_shown_review_fingerprint() -> None:
