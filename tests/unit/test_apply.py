@@ -31,6 +31,7 @@ from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces.lineage import apply_result_event
+from airflow_dq_agent.warehouse.db import DDL_PATH
 
 
 class _RecordingConnection:
@@ -686,3 +687,10 @@ def test_null_fill_requires_contract_compatible_value() -> None:
             params={"column": "total_amount", "fill_value": "not-a-float"},
             run_id="test-run",
         )
+
+
+def test_ddl_does_not_grant_dq_audit_select_on_traces() -> None:
+    ddl = DDL_PATH.read_text(encoding="utf-8")
+
+    assert "GRANT SELECT ON dq.traces TO dq_audit" not in ddl
+    assert "GRANT INSERT ON dq.traces, dq.check_runs TO dq_audit" in ddl
