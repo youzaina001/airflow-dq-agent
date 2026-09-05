@@ -259,7 +259,7 @@ def verify_executable_params(
             raise PermissionError(
                 f"Refusing {refusing}: quality evidence is not a failed check in this quality run"
             ) from exc
-        if derived != item.params:
+        if ExecutablePlanItem.freeze_params(derived) != item.params:
             raise PermissionError(f"Refusing {refusing}: item parameters do not match Check Policy")
     if not plan.blocked and covered != set(report_failures):
         raise PermissionError(
