@@ -80,7 +80,11 @@ class _RecordingConnection:
 
     def execute(self, statement: object, *_: object) -> object:
         self.statements.append(str(statement))
-        return type("Result", (), {"rowcount": 1})()
+        return type(
+            "Result",
+            (),
+            {"rowcount": 1, "scalar": lambda self: None, "first": lambda self: None},
+        )()
 
 
 class _RecordingTransaction:
