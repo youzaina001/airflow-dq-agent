@@ -12,7 +12,7 @@ from airflow_dq_agent.catalog import (
     list_tables,
 )
 from airflow_dq_agent.contracts.models import Dimension
-from airflow_dq_agent.quality.registry import CheckPolicy, CheckSpec, get_check_spec
+from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckPolicy, CheckSpec, get_check_spec
 
 
 def test_catalog_reads_are_contract_backed() -> None:
@@ -179,3 +179,27 @@ def test_every_catalogued_action_owns_validation_and_rendering(
 def test_action_coverage_cases_match_the_governed_action_registry() -> None:
     assert set(_ACTION_CASES) == {action.action_id for action in list_remediation_actions()}
     assert set(_DERIVATION_CASES) == {action.action_id for action in list_remediation_actions()}
+
+
+def test_every_shipped_check_policy_derives_bindable_params() -> None:
+    for spec in CHECK_SPECS.values():
+        for policy in spec.policies:
+            get_governed_action(policy.action_id).derive_params(spec)
+
+
+def test_check_spec_refuses_dedupe_policy_on_a_disallowed_table() -> None:
+    with pytest.raises(ValueError, match="not allowed on dim_product"):
+        CheckSpec(
+            check_id="dim_product.sku.uniqueness.illegal",
+            table="dim_product",
+            column="sku",
+            dimension=Dimension.UNIQUENESS,
+            description="sku is unique",
+            business_key=["sku"],
+            policies=[
+                CheckPolicy(
+                    action_id="dedupe_keep_min_pk",
+                    parameters={"business_key": ["sku"]},
+                )
+            ],
+        )

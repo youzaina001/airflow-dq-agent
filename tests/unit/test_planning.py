@@ -1,6 +1,7 @@
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts import (
     CandidateAction,
+    CheckResult,
     ExecutablePlanItem,
     Proposal,
     QualityEvidence,
@@ -9,6 +10,7 @@ from airflow_dq_agent.contracts import (
 from airflow_dq_agent.contracts.models import CheckStatus
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
+from airflow_dq_agent.quality.registry import get_check_spec
 
 
 class _TargetSets:
@@ -145,3 +147,66 @@ def test_compiler_does_not_treat_error_status_as_executable_evidence() -> None:
     assert plan.blocked is True
     assert plan.items[0].kind == "non_executable"
     assert not any(item.kind == "executable" for item in plan.items)
+
+
+def test_red_dim_product_uniqueness_does_not_block_executable_completeness() -> None:
+    report = seeded_failure_report()
+    completeness = report.get("fact_orders.total_amount.completeness")
+    uniqueness_spec = get_check_spec("dim_product.sku.uniqueness")
+    assert completeness is not None
+    uniqueness = CheckResult(
+        check_id=uniqueness_spec.check_id,
+        table=uniqueness_spec.table,
+        column=uniqueness_spec.column,
+        dimension=uniqueness_spec.dimension,
+        status=CheckStatus.FAIL,
+        n_failed=2,
+        n_total=40,
+        message="sku is unique",
+        contract_id=uniqueness_spec.contract_id,
+        predicate=uniqueness_spec.description,
+    )
+    scoped_report = report.model_copy(update={"checks": [completeness, uniqueness]})
+    candidate = Proposal(
+        summary="Remediate the failed completeness and uniqueness checks.",
+        root_cause_hypothesis="A required total was omitted and a product sku collided.",
+        candidate_actions=[
+            CandidateAction(
+                action_id=get_check_spec(completeness.check_id).policies[0].action_id,
+                evidence=[
+                    QualityEvidence(
+                        check_id=completeness.check_id, contract_id=completeness.contract_id
+                    )
+                ],
+                rationale="Request the reviewed completeness action.",
+            ),
+            CandidateAction(
+                action_id=uniqueness_spec.policies[0].action_id,
+                evidence=[
+                    QualityEvidence(
+                        check_id=uniqueness.check_id, contract_id=uniqueness.contract_id
+                    )
+                ],
+                rationale="Request the reviewed uniqueness action.",
+            ),
+        ],
+        confidence=0.9,
+    )
+
+    plan = compile_remediation_plan(scoped_report, candidate, target_sets=_TargetSets())
+
+    completeness_item = next(
+        item
+        for item in plan.items
+        if any(evidence.check_id == completeness.check_id for evidence in item.evidence)
+    )
+    uniqueness_item = next(
+        item
+        for item in plan.items
+        if any(evidence.check_id == uniqueness.check_id for evidence in item.evidence)
+    )
+    assert completeness_item.kind == "executable"
+    assert completeness_item.action_id == "quarantine_nulls"
+    assert uniqueness_item.kind == "executable"
+    assert uniqueness_item.action_id == "no_op_alert"
+    assert plan.blocked is False
