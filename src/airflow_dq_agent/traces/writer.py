@@ -191,11 +191,23 @@ def append_human_decision(
     predecessor: AuditEvent,
     decision: HumanDecision,
     *,
+    plan_id: str | None = None,
+    plan_fingerprint: str | None = None,
+    evaluation_id: str | None = None,
+    evaluation_fingerprint: str | None = None,
     directory: Path | None = None,
     dsn: str | None = None,
 ) -> AuditEvent:
     """Persist an attributable decision after identity and note validation."""
-    event = decision_event(quality_run_id, decision, predecessor)
+    event = decision_event(
+        quality_run_id,
+        decision,
+        predecessor,
+        plan_id=plan_id,
+        plan_fingerprint=plan_fingerprint,
+        evaluation_id=evaluation_id,
+        evaluation_fingerprint=evaluation_fingerprint,
+    )
     append_event(event, directory=directory, dsn=dsn)
     return event
 
