@@ -634,7 +634,5 @@ def test_forged_decision_fingerprint_cannot_create_apply_admission() -> None:
     forged = decision.model_copy(update={"fingerprint": "sha256:forged-decision"})
 
     with pytest.raises(PermissionError, match="fingerprint") as refused:
-        create_apply_admission(
-            plan, evaluation, forged, report=report, audit_repository=repository
-        )
+        create_apply_admission(plan, evaluation, forged, report=report, audit_repository=repository)
     _assert_refusal_is_safe(refused.value)
