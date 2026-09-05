@@ -37,6 +37,7 @@ from airflow_dq_agent.planning.integrity import (
     verify_plan_integrity,
     warehouse_environment_id,
 )
+from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces.lineage import decision_event, quality_report_event
@@ -137,6 +138,7 @@ def _compile_evaluated_from(
     report: QualitySuiteReport,
     *check_actions: tuple[str, str],
     warehouse_environment_id: str | None = None,
+    target_sets: object | None = None,
 ) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     checks = []
     actions = []
@@ -163,7 +165,7 @@ def _compile_evaluated_from(
             candidate_actions=actions,
             confidence=0.9,
         ),
-        target_sets=_TargetSets(),
+        target_sets=target_sets if target_sets is not None else _TargetSets(),
         warehouse_environment_id=warehouse_environment_id,
     )
     evaluation = evaluate_plan(plan)
@@ -811,6 +813,16 @@ def test_fingerprinted_plan_does_not_share_nested_param_containers_with_check_po
     assert plan.fingerprint == stored_fingerprint
 
 
+def test_json_revived_plan_items_remain_a_frozen_tuple_of_executables() -> None:
+    plan, _evaluation, _report = _compile_evaluated(
+        ("fact_orders.total_amount.completeness", "quarantine_nulls")
+    )
+    revived = RemediationPlan.model_validate(plan.model_dump(mode="json"))
+    executable = tuple(item for item in revived.items if isinstance(item, ExecutablePlanItem))
+    assert isinstance(revived.items, tuple)
+    assert executable == revived.items
+
+
 def test_governed_artifacts_reject_unexpected_fields() -> None:
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls")
@@ -863,6 +875,56 @@ def test_apply_refuses_mutation_when_apply_connection_is_a_different_warehouse_e
         )
     _assert_refusal_is_safe(refused.value)
     assert engine.transaction.connection.statements == []
+
+
+def test_compile_binds_warehouse_identity_from_target_resolver_when_unspecified(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    dsn = "postgresql+psycopg://reader:s3cret@ci-pg.example:55432/warehouse"
+
+    class _EngineBoundResolver:
+        warehouse_environment_id = warehouse_environment_id(dsn)
+
+        def resolve(self, **_: object) -> TargetSet:
+            return TargetSet(count=5, fingerprint="targets:orders-null-v1")
+
+    plan, evaluation, report = _compile_evaluated_from(
+        seeded_failure_report(),
+        ("fact_orders.total_amount.completeness", "quarantine_nulls"),
+        target_sets=_EngineBoundResolver(),
+    )
+    admission = create_apply_admission(plan, evaluation, _decision(), now=NOW, report=report)
+    assert plan.warehouse_environment_id == "ci-pg.example:55432/warehouse"
+    assert admission.warehouse_environment_id == plan.warehouse_environment_id
+    assert "s3cret" not in plan.warehouse_environment_id
+    assert "reader" not in plan.warehouse_environment_id
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver",
+        _MatchingTargetResolver,
+    )
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
+    engine = _RecordingEngine(dsn)
+    result = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=NOW,
+        run_id="unit-warehouse-resolver-bind",
+    )
+    assert result.steps
+    assert engine.transaction.connection.statements
+
+
+def test_postgres_target_resolver_warehouse_identity_omits_role_and_secret() -> None:
+    engine = _RecordingEngine("postgresql+psycopg://reader:s3cret@ci-pg.example:55432/warehouse")
+    resolver = PostgresTargetSetResolver(engine=engine)  # type: ignore[arg-type]
+    assert resolver.warehouse_environment_id == "ci-pg.example:55432/warehouse"
+    assert "s3cret" not in resolver.warehouse_environment_id
+    assert "reader" not in resolver.warehouse_environment_id
 
 
 def test_apply_accepts_same_warehouse_environment_with_a_different_connection_role(
