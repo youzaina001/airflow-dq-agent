@@ -163,7 +163,7 @@ def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
 
     plan = RemediationPlan.model_validate(compiled_payload["plan"])
     assert plan.items
-    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    executable = tuple(item for item in plan.items if isinstance(item, ExecutablePlanItem))
     assert executable == plan.items
     assert all(item.target_set.count >= 0 for item in executable)
     assert sum(item.target_set.count for item in executable) > 0
