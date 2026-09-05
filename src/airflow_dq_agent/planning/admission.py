@@ -137,6 +137,11 @@ def create_apply_admission(
     decided_at = decision.decided_at
     if decided_at.tzinfo is None:
         decided_at = decided_at.replace(tzinfo=UTC)
+    # Zero extra skew: a later decided_at would expand the mutation window beyond TTL.
+    if decided_at > issued_at:
+        raise PermissionError(
+            "Refusing admission: human decision timestamp is after admission time"
+        )
     expires_at = decided_at + ttl
     if expires_at <= issued_at:
         raise PermissionError("Refusing admission: apply admission has expired")
