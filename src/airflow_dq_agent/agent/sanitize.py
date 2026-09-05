@@ -11,6 +11,7 @@ from airflow_dq_agent.contracts.models import (
     QualityEvidence,
     QualitySuiteReport,
 )
+from airflow_dq_agent.quality.registry import get_check_spec
 
 
 def safe_proposal_for_xcom(report: QualitySuiteReport, proposal: Proposal) -> dict[str, Any]:
@@ -32,6 +33,14 @@ def safe_proposal_for_xcom(report: QualitySuiteReport, proposal: Proposal) -> di
         for evidence in requested.evidence:
             check = report_checks.get(evidence.check_id)
             if check is None or evidence.contract_id != check.contract_id:
+                raise PermissionError("Refusing to persist an unbounded candidate proposal")
+            try:
+                spec = get_check_spec(check.check_id)
+            except KeyError as exc:
+                raise PermissionError(
+                    "Refusing to persist an unbounded candidate proposal"
+                ) from exc
+            if spec.rule_for(requested.action_id) is None:
                 raise PermissionError("Refusing to persist an unbounded candidate proposal")
             safe_evidence.append(
                 QualityEvidence(check_id=check.check_id, contract_id=check.contract_id)

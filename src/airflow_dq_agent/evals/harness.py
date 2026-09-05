@@ -21,6 +21,7 @@ from airflow_dq_agent.planning.integrity import (
     evaluation_payload_fingerprint,
     verify_plan_integrity,
 )
+from airflow_dq_agent.quality.registry import get_check_spec
 
 _DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
 
@@ -129,10 +130,48 @@ def _allowlist_score(proposal: Proposal) -> EvalScore:
         "allowlist_compliance",
         0.0 if unknown else 1.0,
         1.0,
-        "Every candidate action is catalogued; check-policy enforcement happens during compilation."
+        "Every candidate action is catalogued."
         if not unknown
         else "Candidate requested an action outside the remediation catalog.",
         action_ids=unknown,
+    )
+
+
+def _check_policy_score(report: QualitySuiteReport, proposal: Proposal) -> EvalScore:
+    illegal: list[str] = []
+    covered: set[str] = set()
+    failures = {check.check_id for check in report.failed_checks}
+    for action in proposal.candidate_actions:
+        for evidence in action.evidence:
+            try:
+                spec = get_check_spec(evidence.check_id)
+            except KeyError:
+                illegal.append(action.action_id)
+                continue
+            if spec.rule_for(action.action_id) is None:
+                illegal.append(action.action_id)
+                continue
+            if evidence.check_id in failures:
+                covered.add(evidence.check_id)
+    omitted = sorted(failures - covered)
+    illegal_ids = sorted(set(illegal))
+    passed = not illegal_ids and not omitted
+    if passed:
+        rationale = (
+            "Every candidate action is declared by the Check Policy "
+            "and every failed check is covered."
+        )
+    elif illegal_ids:
+        rationale = "Candidate requested an action that the Check Policy does not declare."
+    else:
+        rationale = "Candidate omitted failed-check coverage required by Check Policy."
+    return _score(
+        "check_policy",
+        1.0 if passed else 0.0,
+        1.0,
+        rationale,
+        action_ids=illegal_ids,
+        omitted=omitted,
     )
 
 
@@ -149,6 +188,7 @@ def evaluate_proposal(
             _score("groundedness", 0.0, settings.eval_groundedness_threshold, "Invalid candidate."),
             _score("destructive_risk", 0.0, 1.0, "Invalid candidate."),
             _score("allowlist_compliance", 0.0, 1.0, "Invalid candidate."),
+            _score("check_policy", 0.0, 1.0, "Invalid candidate."),
         ]
     else:
         scores = [
@@ -157,6 +197,7 @@ def evaluate_proposal(
             _groundedness_score(report, parsed, settings.eval_groundedness_threshold),
             _destructive_score(parsed),
             _allowlist_score(parsed),
+            _check_policy_score(report, parsed),
         ]
     blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
     return EvalReport(
