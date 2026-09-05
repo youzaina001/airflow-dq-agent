@@ -275,6 +275,7 @@ def test_verify_executable_params_refuses_duplicate_action_and_evidence() -> Non
                 quality_run_id=plan.quality_run_id,
                 candidate_fingerprint=plan.candidate_fingerprint,
                 policy_fingerprint=plan.policy_fingerprint,
+                warehouse_environment_id=plan.warehouse_environment_id,
                 items=items,
             ),
         }
