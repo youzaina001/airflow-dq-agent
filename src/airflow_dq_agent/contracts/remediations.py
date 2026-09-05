@@ -54,7 +54,7 @@ def validate_common_params(
     for key, value in params.items():
         if key not in identifier_params:
             continue
-        if key == "business_key" and isinstance(value, list):
+        if key == "business_key" and isinstance(value, (list, tuple)):
             if not value:
                 errors.append("business_key must be a non-empty list of identifiers")
             for item in value:

@@ -46,9 +46,9 @@ def test_compiler_creates_an_executable_item_from_declared_check_policy() -> Non
     assert item.action_id == "quarantine_nulls"
     assert item.table == "fact_orders"
     assert item.params == {"column": "total_amount", "pk_column": "order_id"}
-    assert item.evidence == [
-        QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
-    ]
+    assert item.evidence == (
+        QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id),
+    )
     assert item.target_set == TargetSet(count=5, fingerprint="targets:orders-null-v1")
     assert item.policy_fingerprint
     assert "target_keys" not in plan.model_dump_json()

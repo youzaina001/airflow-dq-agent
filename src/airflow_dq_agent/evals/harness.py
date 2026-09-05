@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from pydantic import ValidationError
 
 from airflow_dq_agent.action_definitions import is_governed_action
 from airflow_dq_agent.config import get_settings
-from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
     EvalReport,
     EvalScore,
@@ -17,6 +17,10 @@ from airflow_dq_agent.contracts.models import (
     RemediationPlan,
 )
 from airflow_dq_agent.planning import current_policy_fingerprint
+from airflow_dq_agent.planning.integrity import (
+    evaluation_payload_fingerprint,
+    verify_plan_integrity,
+)
 
 _DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
 
@@ -40,7 +44,7 @@ def _parse_proposal(proposal: Proposal | dict[str, Any]) -> tuple[Proposal | Non
             0.0,
             1.0,
             "Candidate Proposal does not satisfy the Pydantic output contract.",
-            errors=exc.errors(include_url=False),
+            errors=exc.errors(include_url=False, include_input=False),
         )
     return parsed, _score(
         "schema_validity", 1.0, 1.0, "Candidate Proposal satisfies the Pydantic output contract."
@@ -170,6 +174,7 @@ def evaluate_proposal(
 
 def evaluate_plan(plan: RemediationPlan) -> EvalReport:
     """Evaluate a compiled plan, never a candidate's text, SQL, or parameters."""
+    verify_plan_integrity(plan, refusing="evaluation")
     executable = [item for item in plan.items if item.kind == "executable"]
     compilation_ok = not plan.blocked and len(executable) == len(plan.items)
     compilation = _score(
@@ -207,16 +212,17 @@ def evaluate_plan(plan: RemediationPlan) -> EvalReport:
     scores = [compilation, policy, targets]
     blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
     passed = not blocked
-    fingerprint = canonical_fingerprint(
-        {
-            "plan_id": plan.plan_id,
-            "plan_fingerprint": plan.fingerprint,
-            "passed": passed,
-            "scores": [score.model_dump(mode="json") for score in scores],
-            "blocked_reasons": blocked,
-        }
+    evaluation_id = uuid4().hex
+    fingerprint = evaluation_payload_fingerprint(
+        evaluation_id=evaluation_id,
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        passed=passed,
+        scores=scores,
+        blocked_reasons=blocked,
     )
     return EvalReport(
+        evaluation_id=evaluation_id,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
         fingerprint=fingerprint,

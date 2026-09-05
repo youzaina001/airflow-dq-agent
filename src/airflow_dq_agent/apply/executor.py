@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -21,13 +23,30 @@ from airflow_dq_agent.contracts.models import (
     AuditEvent,
     EvalReport,
     ExecutablePlanItem,
+    QualitySuiteReport,
     RemediationPlan,
 )
 from airflow_dq_agent.planning import current_policy_fingerprint
+from airflow_dq_agent.planning.integrity import (
+    verify_admission_integrity,
+    verify_evaluation_integrity,
+    verify_executable_params,
+    verify_plan_integrity,
+    verify_report_integrity,
+)
+from airflow_dq_agent.planning.integrity import (
+    warehouse_environment_id as environment_id_from_dsn,
+)
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.traces.lineage import apply_result_event
 from airflow_dq_agent.traces.writer import JsonlAuditSink, append_event
 from airflow_dq_agent.warehouse.db import make_engine
+
+logger = logging.getLogger(__name__)
+
+
+class _AuditEventSink(Protocol):
+    def append(self, event: AuditEvent) -> None: ...
 
 
 class AppliedStep(BaseModel):
@@ -47,45 +66,79 @@ class ApplyResult(BaseModel):
     steps: list[AppliedStep] = Field(default_factory=list)
 
 
+def _resolve_apply_warehouse_environment_id(
+    *,
+    warehouse_environment_id: str | None,
+    dsn: str | None,
+    engine: Engine | None,
+) -> str:
+    if warehouse_environment_id is not None:
+        return warehouse_environment_id
+    if dsn is not None:
+        return environment_id_from_dsn(dsn)
+    url = getattr(engine, "url", None) if engine is not None else None
+    if url is not None:
+        return environment_id_from_dsn(str(url))
+    settings = get_settings()
+    return environment_id_from_dsn(settings.apply_dsn or settings.warehouse_dsn)
+
+
+def _require_apply_warehouse_environment(
+    plan: RemediationPlan,
+    admission: ApplyAdmission,
+    *,
+    warehouse_environment_id: str | None,
+    dsn: str | None,
+    engine: Engine | None,
+) -> None:
+    applied = _resolve_apply_warehouse_environment_id(
+        warehouse_environment_id=warehouse_environment_id,
+        dsn=dsn,
+        engine=engine,
+    )
+    if applied != plan.warehouse_environment_id or applied != admission.warehouse_environment_id:
+        raise PermissionError(
+            "Refusing apply: apply connection is a different warehouse/environment"
+        )
+
+
 def _require_plan_admission(
     plan: RemediationPlan,
     evaluation: EvalReport,
     admission: ApplyAdmission,
     *,
+    report: QualitySuiteReport,
     now: datetime,
 ) -> None:
     if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
         raise PermissionError("Refusing apply: remediation plan is blocked")
     if not evaluation.passed:
         raise PermissionError("Refusing apply: remediation-plan evaluation did not pass")
-    if evaluation.plan_id != plan.plan_id or evaluation.plan_fingerprint != plan.fingerprint:
-        raise PermissionError("Refusing apply: evaluation does not belong to this remediation plan")
-    if (
-        admission.plan_id != plan.plan_id
-        or admission.plan_fingerprint != plan.fingerprint
-        or admission.quality_run_id != plan.quality_run_id
-        or admission.evaluation_id != evaluation.evaluation_id
-        or admission.evaluation_fingerprint != evaluation.fingerprint
-    ):
-        raise PermissionError("Refusing apply: admission does not authorize this evaluated plan")
+    verify_report_integrity(report, refusing="apply")
+    verify_plan_integrity(plan, refusing="apply")
+    verify_evaluation_integrity(plan, evaluation, refusing="apply")
+    verify_admission_integrity(plan, evaluation, admission, refusing="apply")
     if now > admission.expires_at:
         raise PermissionError("Refusing apply: apply admission has expired")
     current_policy = current_policy_fingerprint(plan)
     if current_policy != plan.policy_fingerprint or current_policy != admission.policy_fingerprint:
         raise PermissionError("Refusing apply: policy snapshot drifted after admission")
+    verify_executable_params(plan, report=report, refusing="apply")
 
 
-def _require_dry_run(plan: RemediationPlan, evaluation: EvalReport) -> None:
+def _require_dry_run(
+    plan: RemediationPlan, evaluation: EvalReport, *, report: QualitySuiteReport
+) -> None:
     if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
         raise PermissionError("Refusing dry run: remediation plan is blocked")
     if not evaluation.passed:
         raise PermissionError("Refusing dry run: remediation-plan evaluation did not pass")
-    if evaluation.plan_id != plan.plan_id or evaluation.plan_fingerprint != plan.fingerprint:
-        raise PermissionError(
-            "Refusing dry run: evaluation does not belong to this remediation plan"
-        )
+    verify_report_integrity(report, refusing="dry run")
+    verify_plan_integrity(plan, refusing="dry run")
+    verify_evaluation_integrity(plan, evaluation, refusing="dry run")
     if current_policy_fingerprint(plan) != plan.policy_fingerprint:
         raise PermissionError("Refusing dry run: policy snapshot drifted after evaluation")
+    verify_executable_params(plan, report=report, refusing="dry run")
 
 
 def _result_fingerprint(
@@ -168,16 +221,56 @@ def _record_apply_result(
     )
 
 
+def _emit_apply_failed(
+    plan: RemediationPlan,
+    evaluation: EvalReport,
+    admission: ApplyAdmission | None,
+    *,
+    result: ApplyResult,
+    resolved_run_id: str,
+    dry_run: bool,
+) -> None:
+    failure = apply_result_event(
+        plan,
+        evaluation,
+        admission,
+        result_id=result.apply_result_id,
+        result_fingerprint=_result_fingerprint(
+            plan, admission, resolved_run_id, dry_run, result.steps
+        ),
+        dry_run=dry_run,
+        reasons=["controlled apply failed before a result could be admitted"],
+        failed=True,
+    )
+    append_event(failure)
+
+
+def _export_supplementary_apply_event(sink: _AuditEventSink, event: AuditEvent) -> None:
+    try:
+        sink.append(event)
+    except Exception as exc:
+        # After commit; re-raising would invite Airflow to retry a mutation.
+        logger.warning(
+            "supplementary jsonl export failed after committed apply event_id=%s kind=%s error=%s",
+            event.event_id,
+            event.kind,
+            type(exc).__name__,
+        )
+
+
 def apply_plan(
     plan: RemediationPlan,
     evaluation: EvalReport,
     admission: ApplyAdmission | None = None,
     *,
+    report: QualitySuiteReport,
     dry_run: bool = True,
     engine: Engine | None = None,
     dsn: str | None = None,
+    warehouse_environment_id: str | None = None,
     run_id: str | None = None,
     now: datetime | None = None,
+    audit_sink: _AuditEventSink | None = None,
 ) -> ApplyResult:
     """Recheck a whole-plan admission, lock targets, and mutate only matching rows.
 
@@ -187,11 +280,18 @@ def apply_plan(
     """
     applied_at = now or datetime.now(UTC)
     if dry_run:
-        _require_dry_run(plan, evaluation)
+        _require_dry_run(plan, evaluation, report=report)
     else:
         if admission is None:
             raise PermissionError("Refusing apply: mutation requires an apply admission")
-        _require_plan_admission(plan, evaluation, admission, now=applied_at)
+        _require_plan_admission(plan, evaluation, admission, report=report, now=applied_at)
+        _require_apply_warehouse_environment(
+            plan,
+            admission,
+            warehouse_environment_id=warehouse_environment_id,
+            dsn=dsn,
+            engine=engine,
+        )
     database = engine or make_engine(dsn or get_settings().apply_dsn)
     resolved_run_id = run_id or uuid4().hex
     executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
@@ -202,6 +302,8 @@ def apply_plan(
         plan_id=plan.plan_id,
         admission_id=admission.admission_id if admission else None,
     )
+    sink: _AuditEventSink = audit_sink if audit_sink is not None else JsonlAuditSink()
+    event: AuditEvent | None = None
     try:
         with database.begin() as connection:
             _set_controlled_transaction_mode(connection, dry_run=dry_run)
@@ -215,6 +317,9 @@ def apply_plan(
                     raise PermissionError(
                         "Refusing apply: controlled target set changed after plan compilation"
                     )
+            refusing = "dry run" if dry_run else "apply"
+            verify_plan_integrity(plan, refusing=refusing)
+            verify_executable_params(plan, report=report, refusing=refusing)
             for item in executable:
                 action = get_governed_action(item.action_id)
                 rendered = action.render(
@@ -252,21 +357,19 @@ def apply_plan(
                     connection, event=event, result=result, plan=plan, admission=admission
                 )
         if dry_run:
+            assert event is not None
             append_event(event)
-        else:
-            JsonlAuditSink().append(event)
     except Exception:
-        failure = apply_result_event(
+        _emit_apply_failed(
             plan,
             evaluation,
             admission,
-            result_id=result.apply_result_id,
-            result_fingerprint=_result_fingerprint(
-                plan, admission, resolved_run_id, dry_run, result.steps
-            ),
-            dry_run=True,
-            reasons=["controlled apply failed before a result could be admitted"],
-        ).model_copy(update={"kind": "apply_failed"})
-        append_event(failure)
+            result=result,
+            resolved_run_id=resolved_run_id,
+            dry_run=dry_run,
+        )
         raise
+    if not dry_run:
+        assert event is not None
+        _export_supplementary_apply_event(sink, event)
     return result

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 
 class Dimension(StrEnum):
@@ -64,6 +66,8 @@ FORBIDDEN_SQL_TOKENS = (
 
 
 class CheckResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     check_id: str
     table: str
     column: str | None = None
@@ -82,6 +86,8 @@ class CheckResult(BaseModel):
 
 
 class QualitySuiteReport(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     report_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
@@ -120,6 +126,8 @@ class QualitySuiteReport(BaseModel):
 class Citation(BaseModel):
     """A proposal must point at a real check + contract, not a vibe."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     check_id: str
     contract_id: str
     evidence: str = Field(min_length=1)
@@ -127,6 +135,8 @@ class Citation(BaseModel):
 
 class RemediationStep(BaseModel):
     """One allow-listed action. `sql_preview` is for humans; apply re-renders from action_id."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_id: str
     table: str
@@ -152,12 +162,16 @@ class RemediationStep(BaseModel):
 class QualityEvidence(BaseModel):
     """A failed-check reference scoped by the remediation plan's quality run."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     check_id: str = Field(min_length=1)
     contract_id: str = Field(min_length=1)
 
 
 class CandidateAction(BaseModel):
     """An untrusted request for one action; it has no SQL parameters or authority."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_id: str = Field(min_length=1)
     evidence: list[QualityEvidence] = Field(min_length=1)
@@ -167,25 +181,46 @@ class CandidateAction(BaseModel):
 class TargetSet(BaseModel):
     """Durable summary of a controlled target set; never carries its raw keys."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     count: int = Field(ge=0)
     fingerprint: str = Field(min_length=1)
 
 
 class ExecutablePlanItem(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     kind: Literal["executable"] = "executable"
     item_id: str = Field(min_length=1)
     action_id: str = Field(min_length=1)
     table: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
-    evidence: list[QualityEvidence] = Field(min_length=1)
+    evidence: tuple[QualityEvidence, ...] = Field(min_length=1)
     target_set: TargetSet
     policy_fingerprint: str = Field(min_length=1)
 
+    @field_validator("params")
+    @classmethod
+    def freeze_params(cls, value: Mapping[str, Any]) -> MappingProxyType[str, Any]:
+        frozen: dict[str, Any] = {}
+        for key, item in dict(value).items():
+            if isinstance(item, list):
+                frozen[key] = tuple(item)
+            else:
+                frozen[key] = item
+        return MappingProxyType(frozen)
+
+    @field_serializer("params")
+    def serialize_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(value)
+
 
 class NonExecutablePlanItem(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     kind: Literal["non_executable"] = "non_executable"
     item_id: str = Field(min_length=1)
-    evidence: list[QualityEvidence] = Field(min_length=1)
+    evidence: tuple[QualityEvidence, ...] = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 
@@ -198,19 +233,24 @@ PlanItem = Annotated[
 class RemediationPlan(BaseModel):
     """A deterministic, complete collection of executable or blocked plan items."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     plan_id: str = Field(default_factory=lambda: uuid4().hex)
     quality_run_id: str = Field(min_length=1)
     candidate_fingerprint: str = Field(min_length=1)
     policy_fingerprint: str = Field(min_length=1)
-    items: list[PlanItem]
+    items: tuple[PlanItem, ...]
     blocked: bool
     blocked_reasons: list[str] = Field(default_factory=list)
+    warehouse_environment_id: str = Field(min_length=1)
     fingerprint: str = Field(min_length=1)
     compiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ApplyAdmission(BaseModel):
     """A time-bounded authorization for exactly one evaluated remediation plan."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     admission_id: str = Field(default_factory=lambda: uuid4().hex)
     quality_run_id: str = Field(min_length=1)
@@ -221,6 +261,7 @@ class ApplyAdmission(BaseModel):
     decision_id: str = Field(min_length=1)
     decision_event_id: str = Field(min_length=1)
     policy_fingerprint: str = Field(min_length=1)
+    warehouse_environment_id: str = Field(min_length=1)
     issued_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime
     fingerprint: str = Field(min_length=1)
@@ -228,6 +269,8 @@ class ApplyAdmission(BaseModel):
 
 class Proposal(BaseModel):
     """Untrusted typed candidate output. Compilation grants no candidate authority."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     proposal_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
@@ -239,6 +282,8 @@ class Proposal(BaseModel):
 
 
 class EvalScore(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     name: str
     score: float = Field(ge=0.0, le=1.0)
     passed: bool
@@ -247,6 +292,8 @@ class EvalScore(BaseModel):
 
 
 class EvalReport(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     evaluation_id: str = Field(default_factory=lambda: uuid4().hex)
     audit_event_id: str | None = None
     plan_id: str | None = None
@@ -268,6 +315,8 @@ class EvalReport(BaseModel):
 
 
 class HumanDecision(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     decision_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
     audit_event_id: str | None = None
@@ -286,6 +335,8 @@ class ToolCallRecord(BaseModel):
 
 class AuditEvent(BaseModel):
     """A minimized immutable lineage event safe to persist in JSONL or Postgres."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     event_id: str = Field(default_factory=lambda: uuid4().hex)
     kind: Literal[
@@ -310,6 +361,9 @@ class AuditEvent(BaseModel):
     candidate_fingerprint: str | None = None
     plan_id: str | None = None
     plan_fingerprint: str | None = None
+    policy_fingerprint: str | None = None
+    target_count: int | None = None
+    target_set_fingerprint: str | None = None
     evaluation_id: str | None = None
     evaluation_fingerprint: str | None = None
     decision_id: str | None = None
