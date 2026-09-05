@@ -134,7 +134,12 @@ def create_apply_admission(
         ttl=ttl,
         audit_repository=audit_repository,
     )
-    expires_at = issued_at + ttl
+    decided_at = decision.decided_at
+    if decided_at.tzinfo is None:
+        decided_at = decided_at.replace(tzinfo=UTC)
+    expires_at = decided_at + ttl
+    if expires_at <= issued_at:
+        raise PermissionError("Refusing admission: apply admission has expired")
     admission_id = uuid4().hex
     fingerprint = admission_payload_fingerprint(
         admission_id=admission_id,

@@ -25,7 +25,7 @@ def _ttl_hours(ttl: timedelta) -> float:
 
 def _expiry_guidance(ttl_hours: float) -> str:
     return (
-        f"Apply Admission expires {ttl_hours:g} hours after issuance. "
+        f"Apply Admission expires {ttl_hours:g} hours after the Human Decision. "
         "If it expires or Remediation Target Sets drift, recompile the Remediation Plan "
         "and request a new Human Decision; do not apply."
     )
@@ -117,7 +117,7 @@ def render_approval_review_body(review: ApprovalReview) -> str:
     lines.extend(
         [
             "",
-            f"Apply Admission TTL: {review.admission_ttl_hours:g} hours after issuance.",
+            f"Apply Admission TTL: {review.admission_ttl_hours:g} hours after the Human Decision.",
             review.expiry_guidance,
             "",
             "Approve the whole plan or reject it. A note is required.",
