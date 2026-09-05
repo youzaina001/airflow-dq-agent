@@ -28,9 +28,10 @@ from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
-from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
+from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.fixtures import seeded_failure_report
-from airflow_dq_agent.traces.lineage import apply_result_event
+from airflow_dq_agent.traces import InMemoryAuditRepository
+from airflow_dq_agent.traces.lineage import apply_result_event, decision_event, review_event
 
 
 class _RecordingConnection:
@@ -64,26 +65,6 @@ class _RecordingEngine:
 class _TargetSets:
     def resolve(self, **_: object) -> TargetSet:
         return TargetSet(count=5, fingerprint="targets:orders-null-v1")
-
-
-def _audited_approval() -> HumanDecision:
-    decision = HumanDecision(
-        decision="Approve",
-        actor="approver-1",
-        note="Reviewed target set.",
-        audit_event_id="decision-event-1",
-    )
-    return decision.model_copy(
-        update={
-            "fingerprint": decision_payload_fingerprint(
-                decision_id=decision.decision_id,
-                decision=decision.decision,
-                actor=decision.actor,
-                note=decision.note,
-                decided_at=decision.decided_at,
-            )
-        }
-    )
 
 
 class _MatchingTargetResolver:
@@ -219,12 +200,30 @@ def _approved_quarantine_plan(
         target_sets=_TargetSets(),
     )
     evaluation = evaluate_plan(plan)
+    review = build_approval_review(plan, evaluation)
+    shown = review_event(review, evaluation, "evaluation-event-1")
+    decision = HumanDecision(
+        decision="Approve",
+        actor="approver-1",
+        note="Reviewed target set.",
+        review_fingerprint=review.fingerprint,
+    )
+    event = decision_event(
+        plan.quality_run_id,
+        decision,
+        shown,
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
+    )
     admission = create_apply_admission(
         plan,
         evaluation,
-        _audited_approval(),
+        decision.model_copy(update={"audit_event_id": event.event_id}),
         report=scoped,
         now=now,
+        audit_repository=InMemoryAuditRepository([shown, event]),
     )
     return plan, evaluation, admission, scoped
 
@@ -316,12 +315,30 @@ def test_apply_uses_each_governed_action_mutation_capability(
         target_sets=_TargetSets(),
     )
     evaluation = evaluate_plan(plan)
+    review = build_approval_review(plan, evaluation)
+    shown = review_event(review, evaluation, "evaluation-event-1")
+    decision = HumanDecision(
+        decision="Approve",
+        actor="approver-1",
+        note="Reviewed target set.",
+        review_fingerprint=review.fingerprint,
+    )
+    event = decision_event(
+        plan.quality_run_id,
+        decision,
+        shown,
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
+    )
     admission = create_apply_admission(
         plan,
         evaluation,
-        _audited_approval(),
+        decision.model_copy(update={"audit_event_id": event.event_id}),
         report=scoped_report,
         now=now,
+        audit_repository=InMemoryAuditRepository([shown, event]),
     )
     engine = _MutationRecordingEngine()
     monkeypatch.setattr(

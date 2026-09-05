@@ -10,6 +10,7 @@ from airflow_dq_agent.contracts.fingerprints import (
 )
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
+    ApprovalReview,
     AuditEvent,
     EvalReport,
     ExecutablePlanItem,
@@ -33,6 +34,7 @@ def _event(
         "plan_compiled",
         "plan_blocked",
         "evaluation",
+        "approval_review",
         "human_approved",
         "human_rejected",
         "human_timed_out",
@@ -122,8 +124,35 @@ def evaluation_event(
     )
 
 
+def review_event(
+    review: ApprovalReview,
+    evaluation: EvalReport,
+    predecessor: AuditEvent | str,
+) -> AuditEvent:
+    """Persist the sample-free review shown before a Human Decision."""
+    return _event(
+        "approval_review",
+        quality_run_id=review.quality_run_id,
+        predecessor_ids=[_predecessor_id(predecessor)],
+        plan_id=review.plan_id,
+        plan_fingerprint=review.plan_fingerprint,
+        policy_fingerprint=review.policy_fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
+        review_fingerprint=review.fingerprint,
+        review_payload=review.model_dump(mode="json"),
+    )
+
+
 def decision_event(
-    quality_run_id: str, decision: HumanDecision, predecessor: AuditEvent | str
+    quality_run_id: str,
+    decision: HumanDecision,
+    predecessor: AuditEvent | str,
+    *,
+    plan_id: str | None = None,
+    plan_fingerprint: str | None = None,
+    evaluation_id: str | None = None,
+    evaluation_fingerprint: str | None = None,
 ) -> AuditEvent:
     kind = {
         "Approve": "human_approved",
@@ -141,6 +170,11 @@ def decision_event(
         kind,  # type: ignore[arg-type]
         quality_run_id=quality_run_id,
         predecessor_ids=[_predecessor_id(predecessor)],
+        plan_id=plan_id,
+        plan_fingerprint=plan_fingerprint,
+        evaluation_id=evaluation_id,
+        evaluation_fingerprint=evaluation_fingerprint,
+        review_fingerprint=decision.review_fingerprint,
         decision_id=decision.decision_id,
         decision_fingerprint=decision_fingerprint,
         decision_outcome=decision.decision,

@@ -20,6 +20,87 @@ from airflow_dq_agent.planning.integrity import (
     verify_plan_integrity,
     verify_report_integrity,
 )
+from airflow_dq_agent.planning.review import build_approval_review
+from airflow_dq_agent.traces.repository import AuditLineageLookup
+
+
+def _verify_durable_approval(
+    plan: RemediationPlan,
+    evaluation: EvalReport,
+    decision: HumanDecision,
+    *,
+    ttl: timedelta,
+    audit_repository: AuditLineageLookup | None,
+) -> str:
+    """Resolve the Human Decision against Audit Lineage and the reviewed payload."""
+    audit_event_id = decision.audit_event_id
+    if not audit_event_id or not audit_event_id.strip():
+        raise PermissionError("Refusing admission: human decision has no durable audit event")
+    if audit_repository is None:
+        raise PermissionError("Refusing admission: audit lineage lookup is required")
+    event = audit_repository.get(audit_event_id)
+    if event is None or event.event_id != audit_event_id:
+        raise PermissionError("Refusing admission: human decision audit event was not found")
+    if event.kind != "human_approved" or event.decision_outcome != "Approve":
+        raise PermissionError("Refusing admission: audit event is not a human approval")
+    if event.decision_id != decision.decision_id:
+        raise PermissionError("Refusing admission: human decision does not match audit lineage")
+    if event.quality_run_id != plan.quality_run_id:
+        raise PermissionError(
+            "Refusing admission: human decision does not belong to this quality run"
+        )
+    if event.plan_id != plan.plan_id or event.plan_fingerprint != plan.fingerprint:
+        raise PermissionError(
+            "Refusing admission: human decision does not belong to this remediation plan"
+        )
+    if event.decision_actor != decision.actor:
+        raise PermissionError(
+            "Refusing admission: human decision actor does not match audit lineage"
+        )
+    expected = decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
+    )
+    if event.decision_fingerprint != expected:
+        raise PermissionError(
+            "Refusing admission: human decision fingerprint does not match received payload"
+        )
+    if decision.fingerprint and decision.fingerprint != expected:
+        raise PermissionError(
+            "Refusing admission: human decision fingerprint does not match received payload"
+        )
+    if (
+        event.evaluation_id != evaluation.evaluation_id
+        or event.evaluation_fingerprint != evaluation.fingerprint
+    ):
+        raise PermissionError(
+            "Refusing admission: human decision does not belong to this evaluation"
+        )
+    review = build_approval_review(plan, evaluation, ttl=ttl)
+    bound = decision.review_fingerprint
+    if not bound or bound != review.fingerprint or event.review_fingerprint != review.fingerprint:
+        raise PermissionError("Refusing admission: human decision does not bind the reviewed plan")
+    if not event.predecessor_ids:
+        raise PermissionError("Refusing admission: human decision has no reviewed predecessor")
+    predecessor = audit_repository.get(event.predecessor_ids[0])
+    if predecessor is None or predecessor.kind != "approval_review":
+        raise PermissionError("Refusing admission: approval review audit event was not found")
+    if (
+        predecessor.review_fingerprint != review.fingerprint
+        or predecessor.evaluation_id != evaluation.evaluation_id
+        or predecessor.evaluation_fingerprint != evaluation.fingerprint
+    ):
+        raise PermissionError(
+            "Refusing admission: approval review does not belong to this evaluation"
+        )
+    if evaluation.audit_event_id and predecessor.predecessor_ids != [evaluation.audit_event_id]:
+        raise PermissionError(
+            "Refusing admission: approval review does not belong to this evaluation"
+        )
+    return audit_event_id
 
 
 def create_apply_admission(
@@ -30,6 +111,7 @@ def create_apply_admission(
     report: QualitySuiteReport,
     now: datetime | None = None,
     ttl: timedelta = timedelta(hours=24),
+    audit_repository: AuditLineageLookup | None = None,
 ) -> ApplyAdmission:
     """Create admission only for one fresh, approved, fully executable plan."""
     issued_at = now or datetime.now(UTC)
@@ -45,23 +127,13 @@ def create_apply_admission(
         raise PermissionError("Refusing admission: human decision is not an approval")
     if not decision.actor.strip() or not decision.note or not decision.note.strip():
         raise PermissionError("Refusing admission: approval requires an actor and non-empty note")
-    audit_event_id = decision.audit_event_id
-    if not audit_event_id or not audit_event_id.strip():
-        raise PermissionError("Refusing admission: human decision has no durable audit event")
-    decision_fingerprint = decision.fingerprint
-    if not decision_fingerprint or not decision_fingerprint.strip():
-        raise PermissionError("Refusing admission: human decision has no immutable fingerprint")
-    expected = decision_payload_fingerprint(
-        decision_id=decision.decision_id,
-        decision=decision.decision,
-        actor=decision.actor,
-        note=decision.note,
-        decided_at=decision.decided_at,
+    audit_event_id = _verify_durable_approval(
+        plan,
+        evaluation,
+        decision,
+        ttl=ttl,
+        audit_repository=audit_repository,
     )
-    if expected != decision_fingerprint:
-        raise PermissionError(
-            "Refusing admission: human decision fingerprint does not match received payload"
-        )
     expires_at = issued_at + ttl
     admission_id = uuid4().hex
     fingerprint = admission_payload_fingerprint(
