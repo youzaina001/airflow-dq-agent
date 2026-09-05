@@ -919,6 +919,22 @@ def test_compile_binds_warehouse_identity_from_target_resolver_when_unspecified(
     assert engine.transaction.connection.statements
 
 
+def test_explicit_warehouse_environment_id_wins_over_target_resolver() -> None:
+    class _EngineBoundResolver:
+        warehouse_environment_id = "ci-pg.example:55432/warehouse"
+
+        def resolve(self, **_: object) -> TargetSet:
+            return TargetSet(count=5, fingerprint="targets:orders-null-v1")
+
+    plan, _evaluation, _report = _compile_evaluated_from(
+        seeded_failure_report(),
+        ("fact_orders.total_amount.completeness", "quarantine_nulls"),
+        warehouse_environment_id="staging.example:5432/warehouse",
+        target_sets=_EngineBoundResolver(),
+    )
+    assert plan.warehouse_environment_id == "staging.example:5432/warehouse"
+
+
 def test_postgres_target_resolver_warehouse_identity_omits_role_and_secret() -> None:
     engine = _RecordingEngine("postgresql+psycopg://reader:s3cret@ci-pg.example:55432/warehouse")
     resolver = PostgresTargetSetResolver(engine=engine)  # type: ignore[arg-type]
