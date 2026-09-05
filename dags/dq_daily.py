@@ -23,6 +23,7 @@ from airflow_dq_agent.contracts import (
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
+from airflow_dq_agent.planning.integrity import verify_report_integrity
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 from airflow_dq_agent.traces import append_event, candidate_proposal_event
@@ -53,6 +54,7 @@ def dq_daily() -> None:
     @task
     def propose_task(report_data: dict[str, Any]) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
+        verify_report_integrity(report, refusing="proposal")
         # The raw model result and any bounded tool samples remain transient inside
         # this task. Only canonical authority identifiers and controlled text are
         # reconstructed for the durable XCom return value.
@@ -64,6 +66,7 @@ def dq_daily() -> None:
     ) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
         proposal = Proposal.model_validate(proposal_data)
+        verify_report_integrity(report, refusing="candidate audit")
         if report.audit_event_id is None:
             raise RuntimeError("quality report has no persisted audit root")
         event = candidate_proposal_event(report, proposal, report.audit_event_id)
@@ -82,6 +85,7 @@ def dq_daily() -> None:
         report = QualitySuiteReport.model_validate(report_data)
         proposal = Proposal.model_validate(candidate_data["proposal"])
         candidate_evaluation = EvalReport.model_validate(candidate_data["candidate_evaluation"])
+        verify_report_integrity(report, refusing="plan compilation")
         if not candidate_evaluation.passed:
             raise AirflowSkipException("Candidate Proposal evaluation failed")
         plan = compile_remediation_plan(
@@ -128,21 +132,31 @@ def dq_daily() -> None:
 
         @task
         def admit_apply_task(
-            evaluation_data: dict[str, Any], decision_data: dict[str, Any]
+            report_data: dict[str, Any],
+            evaluation_data: dict[str, Any],
+            decision_data: dict[str, Any],
         ) -> dict[str, Any]:
+            report = QualitySuiteReport.model_validate(report_data)
             plan = RemediationPlan.model_validate(evaluation_data["plan"])
             evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
             parsed_decision = HumanDecision.model_validate(decision_data)
             if parsed_decision.decision != "Approve":
                 raise AirflowSkipException("HITL did not approve this remediation plan")
             return create_apply_admission(
-                plan, evaluation, parsed_decision, ttl=settings.apply_admission_ttl
+                plan,
+                evaluation,
+                parsed_decision,
+                report=report,
+                ttl=settings.apply_admission_ttl,
             ).model_dump(mode="json")
 
         @task
         def apply_after_admission_task(
-            evaluation_data: dict[str, Any], admission_data: dict[str, Any]
+            report_data: dict[str, Any],
+            evaluation_data: dict[str, Any],
+            admission_data: dict[str, Any],
         ) -> dict[str, Any]:
+            report = QualitySuiteReport.model_validate(report_data)
             plan = RemediationPlan.model_validate(evaluation_data["plan"])
             evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
             admission = ApplyAdmission.model_validate(admission_data)
@@ -150,6 +164,7 @@ def dq_daily() -> None:
                 plan,
                 evaluation,
                 admission,
+                report=report,
                 dry_run=False,
                 engine=make_engine(settings.apply_dsn or settings.warehouse_dsn),
             )
@@ -179,8 +194,8 @@ def dq_daily() -> None:
             response_timeout=timedelta(hours=24),
         )
         approval_gate >> approval
-        admission = admit_apply_task(evaluated, approval.output)
-        apply_after_admission_task(evaluated, admission)
+        admission = admit_apply_task(report, evaluated, approval.output)
+        apply_after_admission_task(report, evaluated, admission)
 
 
 dq_daily()

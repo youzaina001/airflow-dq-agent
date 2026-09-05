@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from airflow_dq_agent.contracts.models import AuditEvent, HumanDecision
+from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
 from airflow_dq_agent.traces.lineage import decision_event
 
 
@@ -74,6 +75,17 @@ def audit_approval_decision(
 ) -> HumanDecision:
     """Persist a parsed decision before returning it to any downstream admission path."""
     decision = parse_approval_output(output, approver_ids=approver_ids)
+    decision = decision.model_copy(
+        update={
+            "fingerprint": decision_payload_fingerprint(
+                decision_id=decision.decision_id,
+                decision=decision.decision,
+                actor=decision.actor,
+                note=decision.note,
+                decided_at=decision.decided_at,
+            )
+        }
+    )
     event = decision_event(quality_run_id, decision, predecessor)
     persist(event)
     return decision.model_copy(update={"audit_event_id": event.event_id})

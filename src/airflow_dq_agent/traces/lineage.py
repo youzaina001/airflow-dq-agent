@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
+from airflow_dq_agent.contracts.fingerprints import (
+    canonical_fingerprint,
+    report_payload_fingerprint,
+)
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     AuditEvent,
@@ -15,25 +18,12 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
+from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
 
 
 def _report_fingerprint(report: QualitySuiteReport) -> str:
     """Fingerprint quality results without storing samples or row values."""
-    return canonical_fingerprint(
-        {
-            "quality_run_id": report.run_id,
-            "checks": [
-                {
-                    "check_id": check.check_id,
-                    "contract_id": check.contract_id,
-                    "status": check.status,
-                    "n_failed": check.n_failed,
-                    "n_total": check.n_total,
-                }
-                for check in report.checks
-            ],
-        }
-    )
+    return report_payload_fingerprint(report)
 
 
 def _event(
@@ -140,14 +130,12 @@ def decision_event(
         "Reject": "human_rejected",
         "Timeout": "human_timed_out",
     }.get(decision.decision, "human_rejected")
-    decision_fingerprint = decision.fingerprint or canonical_fingerprint(
-        {
-            "decision_id": decision.decision_id,
-            "decision": decision.decision,
-            "actor": decision.actor,
-            "note": decision.note,
-            "decided_at": decision.decided_at,
-        }
+    decision_fingerprint = decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
     )
     return _event(
         kind,  # type: ignore[arg-type]
@@ -171,10 +159,18 @@ def apply_result_event(
     result_fingerprint: str,
     dry_run: bool,
     reasons: list[str] | None = None,
+    failed: bool = False,
 ) -> AuditEvent:
     """Build the terminal event body that dq_apply records atomically with mutation."""
+    kind: Literal["dry_run", "apply_succeeded", "apply_failed"]
+    if failed:
+        kind = "apply_failed"
+    elif dry_run:
+        kind = "dry_run"
+    else:
+        kind = "apply_succeeded"
     return _event(
-        "dry_run" if dry_run else "apply_succeeded",
+        kind,
         quality_run_id=plan.quality_run_id,
         predecessor_ids=[
             admission.decision_event_id
