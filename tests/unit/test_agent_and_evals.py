@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -43,3 +44,23 @@ def test_replay_revalidates_trace_envelope(monkeypatch: pytest.MonkeyPatch) -> N
     run = run_proposal_agent(report)
     assert run.llm_mode == "replay"
     assert evaluate_proposal(report, run.proposal).passed
+
+
+def test_evaluate_proposal_omits_unexpected_field_input_from_eval_report() -> None:
+    leaked = "leaked-sample-9001@example.invalid"
+    evaluation = evaluate_proposal(
+        seeded_failure_report(),
+        {
+            "summary": "Quarantine failed rows.",
+            "root_cause_hypothesis": "A required value was omitted.",
+            "confidence": 0.9,
+            "secret_rows": leaked,
+        },
+    )
+    assert not evaluation.passed
+    durable = json.dumps(evaluation.model_dump(mode="json"))
+    assert leaked not in durable
+    assert leaked not in evaluation.summary_markdown
+    for score in evaluation.scores:
+        assert leaked not in json.dumps(score.details)
+        assert leaked not in score.rationale

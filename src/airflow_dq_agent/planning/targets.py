@@ -10,6 +10,7 @@ from sqlalchemy.engine import Connection, Engine
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import ExecutablePlanItem, TargetSet
+from airflow_dq_agent.planning.integrity import warehouse_environment_id
 from airflow_dq_agent.warehouse.db import make_engine
 
 
@@ -23,6 +24,10 @@ class PostgresTargetSetResolver:
 
     def __init__(self, *, engine: Engine | None = None, dsn: str | None = None) -> None:
         self._engine = engine or make_engine(dsn)
+
+    @property
+    def warehouse_environment_id(self) -> str:
+        return warehouse_environment_id(str(self._engine.url))
 
     def resolve(
         self,

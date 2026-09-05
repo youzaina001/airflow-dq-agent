@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Protocol
+from uuid import uuid4
 
 from airflow_dq_agent.action_definitions import get_governed_action
+from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
@@ -17,6 +19,12 @@ from airflow_dq_agent.contracts.models import (
     TargetSet,
 )
 from airflow_dq_agent.contracts.tables import get_table_contract
+from airflow_dq_agent.planning.integrity import (
+    plan_payload_fingerprint,
+)
+from airflow_dq_agent.planning.integrity import (
+    warehouse_environment_id as environment_id_from_dsn,
+)
 from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 
 RENDERER_VERSION = "controlled-renderer-v2"
@@ -79,10 +87,12 @@ def _validated_evidence(
 def _blocked_item(
     *,
     index: int,
-    evidence: list[QualityEvidence],
+    evidence: Sequence[QualityEvidence],
     reason: str,
 ) -> NonExecutablePlanItem:
-    return NonExecutablePlanItem(item_id=f"candidate-{index}", evidence=evidence, reason=reason)
+    return NonExecutablePlanItem(
+        item_id=f"candidate-{index}", evidence=tuple(evidence), reason=reason
+    )
 
 
 def compile_remediation_plan(
@@ -90,6 +100,7 @@ def compile_remediation_plan(
     candidate: Proposal,
     *,
     target_sets: TargetSetResolver,
+    warehouse_environment_id: str | None = None,
 ) -> RemediationPlan:
     """Compile one candidate action into one plan item without inventing mutations.
 
@@ -129,7 +140,7 @@ def compile_remediation_plan(
                 action_id=requested.action_id,
                 table=specs[0].table,
                 params=params,
-                evidence=evidence,
+                evidence=tuple(evidence),
                 target_set=target_set,
                 policy_fingerprint=_policy_fingerprint(specs, requested.action_id),
             )
@@ -156,7 +167,7 @@ def compile_remediation_plan(
         items.append(
             NonExecutablePlanItem(
                 item_id="omitted-failures",
-                evidence=omitted,
+                evidence=tuple(omitted),
                 reason="candidate proposal omitted failed-check coverage",
             )
         )
@@ -165,20 +176,32 @@ def compile_remediation_plan(
         [item.policy_fingerprint for item in items if isinstance(item, ExecutablePlanItem)]
     )
     candidate_fingerprint = canonical_fingerprint(candidate)
-    plan_fingerprint = canonical_fingerprint(
-        {
-            "quality_run_id": report.run_id,
-            "candidate_fingerprint": candidate_fingerprint,
-            "policy_fingerprint": policy_fingerprint,
-            "items": [item.model_dump(mode="json") for item in items],
-        }
-    )
-    return RemediationPlan(
+    plan_id = uuid4().hex
+    if warehouse_environment_id is not None:
+        bound_environment_id = warehouse_environment_id
+    else:
+        inferred = getattr(target_sets, "warehouse_environment_id", None)
+        bound_environment_id = (
+            inferred
+            if isinstance(inferred, str) and inferred
+            else environment_id_from_dsn(get_settings().warehouse_dsn)
+        )
+    plan_fingerprint = plan_payload_fingerprint(
+        plan_id=plan_id,
         quality_run_id=report.run_id,
         candidate_fingerprint=candidate_fingerprint,
         policy_fingerprint=policy_fingerprint,
+        warehouse_environment_id=bound_environment_id,
         items=items,
+    )
+    return RemediationPlan(
+        plan_id=plan_id,
+        quality_run_id=report.run_id,
+        candidate_fingerprint=candidate_fingerprint,
+        policy_fingerprint=policy_fingerprint,
+        items=tuple(items),
         blocked=bool(blocked_reasons),
         blocked_reasons=blocked_reasons,
+        warehouse_environment_id=bound_environment_id,
         fingerprint=plan_fingerprint,
     )

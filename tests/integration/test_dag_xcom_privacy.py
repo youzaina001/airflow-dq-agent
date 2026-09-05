@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from airflow_dq_agent.agent import AgentRun, run_proposal_agent
+from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import (
     EvalReport,
     ExecutablePlanItem,
@@ -162,7 +163,7 @@ def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
 
     plan = RemediationPlan.model_validate(compiled_payload["plan"])
     assert plan.items
-    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    executable = tuple(item for item in plan.items if isinstance(item, ExecutablePlanItem))
     assert executable == plan.items
     assert all(item.target_set.count >= 0 for item in executable)
     assert sum(item.target_set.count for item in executable) > 0
@@ -178,7 +179,10 @@ def test_live_proposer_echo_is_removed_before_task_returns_xcom(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module, dag_tasks = dag_runtime
-    report = seeded_failure_report().model_copy(update={"audit_event_id": "audit-root-1"})
+    base = seeded_failure_report()
+    report = base.model_copy(
+        update={"audit_event_id": "audit-root-1", "fingerprint": report_payload_fingerprint(base)}
+    )
     base = run_proposal_agent(report).proposal
     echoed = base.model_copy(
         update={

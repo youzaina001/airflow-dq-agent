@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
-from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     EvalReport,
     HumanDecision,
+    QualitySuiteReport,
     RemediationPlan,
+)
+from airflow_dq_agent.planning.integrity import (
+    admission_payload_fingerprint,
+    decision_payload_fingerprint,
+    verify_evaluation_integrity,
+    verify_executable_params,
+    verify_plan_integrity,
+    verify_report_integrity,
 )
 
 
@@ -18,21 +27,20 @@ def create_apply_admission(
     evaluation: EvalReport,
     decision: HumanDecision,
     *,
+    report: QualitySuiteReport,
     now: datetime | None = None,
     ttl: timedelta = timedelta(hours=24),
 ) -> ApplyAdmission:
     """Create admission only for one fresh, approved, fully executable plan."""
     issued_at = now or datetime.now(UTC)
+    verify_report_integrity(report, refusing="admission")
+    verify_plan_integrity(plan, refusing="admission")
     if plan.blocked:
         raise PermissionError("Refusing admission: remediation plan is blocked")
+    verify_executable_params(plan, report=report, refusing="admission")
     if not evaluation.passed:
         raise PermissionError("Refusing admission: remediation-plan evaluation did not pass")
-    if evaluation.plan_id != plan.plan_id or evaluation.plan_fingerprint != plan.fingerprint:
-        raise PermissionError(
-            "Refusing admission: evaluation does not belong to this remediation plan"
-        )
-    if not evaluation.fingerprint:
-        raise PermissionError("Refusing admission: evaluation has no immutable fingerprint")
+    evaluation_fingerprint = verify_evaluation_integrity(plan, evaluation, refusing="admission")
     if decision.decision != "Approve":
         raise PermissionError("Refusing admission: human decision is not an approval")
     if not decision.actor.strip() or not decision.note or not decision.note.strip():
@@ -40,30 +48,47 @@ def create_apply_admission(
     audit_event_id = decision.audit_event_id
     if not audit_event_id or not audit_event_id.strip():
         raise PermissionError("Refusing admission: human decision has no durable audit event")
-    expires_at = issued_at + ttl
-    fingerprint = canonical_fingerprint(
-        {
-            "quality_run_id": plan.quality_run_id,
-            "plan_id": plan.plan_id,
-            "plan_fingerprint": plan.fingerprint,
-            "evaluation_id": evaluation.evaluation_id,
-            "evaluation_fingerprint": evaluation.fingerprint,
-            "decision_id": decision.decision_id,
-            "decision_event_id": audit_event_id,
-            "policy_fingerprint": plan.policy_fingerprint,
-            "issued_at": issued_at,
-            "expires_at": expires_at,
-        }
+    decision_fingerprint = decision.fingerprint
+    if not decision_fingerprint or not decision_fingerprint.strip():
+        raise PermissionError("Refusing admission: human decision has no immutable fingerprint")
+    expected = decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
     )
-    return ApplyAdmission(
+    if expected != decision_fingerprint:
+        raise PermissionError(
+            "Refusing admission: human decision fingerprint does not match received payload"
+        )
+    expires_at = issued_at + ttl
+    admission_id = uuid4().hex
+    fingerprint = admission_payload_fingerprint(
+        admission_id=admission_id,
         quality_run_id=plan.quality_run_id,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
         evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
+        evaluation_fingerprint=evaluation_fingerprint,
         decision_id=decision.decision_id,
         decision_event_id=audit_event_id,
         policy_fingerprint=plan.policy_fingerprint,
+        warehouse_environment_id=plan.warehouse_environment_id,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    return ApplyAdmission(
+        admission_id=admission_id,
+        quality_run_id=plan.quality_run_id,
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation_fingerprint,
+        decision_id=decision.decision_id,
+        decision_event_id=audit_event_id,
+        policy_fingerprint=plan.policy_fingerprint,
+        warehouse_environment_id=plan.warehouse_environment_id,
         issued_at=issued_at,
         expires_at=expires_at,
         fingerprint=fingerprint,

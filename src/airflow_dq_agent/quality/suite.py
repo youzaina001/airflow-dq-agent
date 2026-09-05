@@ -10,6 +10,7 @@ import polars as pl
 from psycopg.errors import UndefinedTable
 from sqlalchemy.engine import Engine
 
+from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import (
     CheckResult,
     CheckStatus,
@@ -203,11 +204,12 @@ def run_suite_on_frames(frames: Mapping[str, pl.DataFrame]) -> QualitySuiteRepor
         checks.append(
             _result(spec, failed=failed, n_total=n_total, message=_message(spec, failed, n_total))
         )
-    return QualitySuiteReport(
+    report = QualitySuiteReport(
         run_id=uuid4().hex,
         checks=checks,
         observed_columns=observed_columns(frames),
     )
+    return report.model_copy(update={"fingerprint": report_payload_fingerprint(report)})
 
 
 def run_quality_suite(dsn: str | None = None) -> QualitySuiteReport:

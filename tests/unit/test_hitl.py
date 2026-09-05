@@ -59,6 +59,28 @@ def test_audited_approval_persists_the_actor_and_note_before_returning() -> None
     assert events[0].decision_actor == "approver-1"
     assert events[0].decision_note == "Reviewed exact target counts."
     assert events[0].decision_fingerprint
+    assert decision.fingerprint
+    assert decision.fingerprint == events[0].decision_fingerprint
+
+
+def test_audited_approval_returns_fingerprint_matching_persisted_event() -> None:
+    report = seeded_failure_report()
+    events = []
+    decision = audit_approval_decision(
+        {
+            "chosen_options": ["Approve"],
+            "params_input": {"approval_note": "Reviewed exact target counts."},
+            "responded_by_user": {"id": "approver-1"},
+            "timedout": False,
+        },
+        approver_ids={"approver-1"},
+        quality_run_id=report.run_id,
+        predecessor=quality_report_event(report),
+        persist=events.append,
+    )
+
+    assert decision.fingerprint
+    assert decision.fingerprint == events[0].decision_fingerprint
 
 
 def test_audited_rejection_is_persisted_before_airflow_can_skip_downstream_tasks() -> None:
@@ -80,6 +102,8 @@ def test_audited_rejection_is_persisted_before_airflow_can_skip_downstream_tasks
     assert decision.decision == "Reject"
     assert decision.audit_event_id == events[0].event_id
     assert events[0].decision_outcome == "Reject"
+    assert decision.fingerprint
+    assert decision.fingerprint == events[0].decision_fingerprint
 
 
 def test_rejection_is_persisted_before_the_provider_branch_callback() -> None:
