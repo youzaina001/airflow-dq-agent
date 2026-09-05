@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts import (
     ApprovalReview,
     CandidateAction,
@@ -15,7 +16,6 @@ from airflow_dq_agent.contracts import (
     RemediationPlan,
     TargetSet,
 )
-from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.hitl import (
     audit_approval_decision,
@@ -250,7 +250,9 @@ def test_approval_review_fingerprint_changes_when_reversible_flips(
     )
     monkeypatch.setattr(
         "airflow_dq_agent.planning.review.get_governed_action",
-        lambda action_id: flipped_action if action_id == "quarantine_nulls" else get_governed_action(action_id),
+        lambda action_id: (
+            flipped_action if action_id == "quarantine_nulls" else get_governed_action(action_id)
+        ),
     )
     flipped = build_approval_review(plan, evaluation)
 
