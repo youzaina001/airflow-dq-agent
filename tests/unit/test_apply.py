@@ -103,7 +103,11 @@ class _MutationRecordingConnection:
 
     def execute(self, statement: object, *_: object) -> object:
         self.statements.append(str(statement))
-        return type("Result", (), {"rowcount": 1})()
+        return type(
+            "Result",
+            (),
+            {"rowcount": 1, "scalar": lambda self: None, "first": lambda self: None},
+        )()
 
 
 class _MutationRecordingTransaction:
@@ -137,7 +141,11 @@ class _ParamRecordingConnection:
 
     def execute(self, statement: object, params: dict[str, object] | None = None) -> object:
         self.calls.append((str(statement), params))
-        return type("Result", (), {"rowcount": 1})()
+        return type(
+            "Result",
+            (),
+            {"rowcount": 1, "scalar": lambda self: None, "first": lambda self: None},
+        )()
 
 
 class _CommitTrackingTransaction:
@@ -452,6 +460,103 @@ def test_default_jsonl_sink_fault_after_commit_keeps_apply_success(
     assert "sample_failures" not in caplog.text
 
 
+class _OneShotConnection:
+    def __init__(self, consumed: set[str]) -> None:
+        self.consumed = consumed
+        self.statements: list[str] = []
+        self.calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def execute(self, statement: object, params: dict[str, object] | None = None) -> object:
+        sql = str(statement)
+        self.statements.append(sql)
+        self.calls.append((sql, params))
+        admission_id = str(params["admission_id"]) if params and "admission_id" in params else None
+        if admission_id is not None and "admission_consumed" in sql:
+            consumed = admission_id in self.consumed
+
+            class _ConsumedResult:
+                def scalar(self) -> bool:
+                    return consumed
+
+                def first(self) -> tuple[bool] | None:
+                    return (consumed,)
+
+            return _ConsumedResult()
+        if admission_id is not None and "record_apply_result" in sql:
+            self.consumed.add(admission_id)
+        return type(
+            "Result",
+            (),
+            {"rowcount": 1, "scalar": lambda self: None, "first": lambda self: None},
+        )()
+
+
+class _OneShotTransaction:
+    def __init__(self, consumed: set[str]) -> None:
+        self.connection = _OneShotConnection(consumed)
+
+    def __enter__(self) -> _OneShotConnection:
+        return self.connection
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+class _OneShotEngine:
+    def __init__(self) -> None:
+        self.consumed: set[str] = set()
+        self.transaction = _OneShotTransaction(self.consumed)
+
+    def begin(self) -> _OneShotTransaction:
+        self.transaction = _OneShotTransaction(self.consumed)
+        return self.transaction
+
+
+def test_apply_refuses_to_consume_the_same_admission_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _OneShotEngine()
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.JsonlAuditSink", _NoopAuditSink)
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-one-shot-first",
+    )
+    assert first.steps
+    first_mutations = [
+        sql for sql in engine.transaction.connection.statements if sql.lstrip().startswith("INSERT")
+    ]
+
+    with pytest.raises(PermissionError, match="already been consumed"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            run_id="unit-one-shot-second",
+        )
+
+    second_mutations = [
+        sql for sql in engine.transaction.connection.statements if sql.lstrip().startswith("INSERT")
+    ]
+    assert first_mutations
+    assert second_mutations == []
+
+
 def test_pre_commit_apply_failure_still_emits_apply_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -486,7 +591,11 @@ def test_pre_commit_apply_failure_still_emits_apply_failed(
             audit_sink=_NoopAuditSink(),
         )
 
-    apply_records = [params for _, params in engine.transaction.connection.calls if params]
+    apply_records = [
+        params
+        for sql, params in engine.transaction.connection.calls
+        if params and "record_apply_result" in sql
+    ]
     lineage_kinds = [getattr(event, "kind", None) for event in lineage]
     assert engine.transaction.rolled_back
     assert not engine.transaction.committed

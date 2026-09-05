@@ -145,6 +145,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS traces_trace_id_unique_idx ON dq.traces (trace
 CREATE INDEX IF NOT EXISTS check_runs_run_check_idx ON dq.check_runs (run_id, check_id);
 CREATE INDEX IF NOT EXISTS quarantine_run_idx ON dq.quarantine_rows (run_id);
 CREATE INDEX IF NOT EXISTS apply_log_plan_idx ON dq.apply_log (plan_id, run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS apply_log_admission_id_unique_idx
+    ON dq.apply_log (admission_id)
+    WHERE admission_id IS NOT NULL AND admission_id <> '';
 
 -- The only audit write authority granted to dq_apply.  Its caller supplies no SQL:
 -- controlled statements are rendered by the trusted local executor before this
@@ -199,6 +202,7 @@ $$;
 GRANT USAGE ON SCHEMA warehouse, dq TO dq_read, dq_audit, dq_apply;
 GRANT SELECT ON ALL TABLES IN SCHEMA warehouse TO dq_read, dq_apply;
 GRANT INSERT ON dq.traces, dq.check_runs TO dq_audit;
+GRANT SELECT ON dq.traces TO dq_audit;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA dq TO dq_audit;
 GRANT INSERT ON dq.quarantine_rows TO dq_apply;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA dq TO dq_apply;
@@ -211,3 +215,22 @@ REVOKE ALL ON FUNCTION dq.record_apply_result(
 GRANT EXECUTE ON FUNCTION dq.record_apply_result(
     TEXT, TEXT, JSONB, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INTEGER, TEXT, INTEGER
 ) TO dq_apply;
+
+CREATE OR REPLACE FUNCTION dq.admission_consumed(p_admission_id TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = dq, pg_temp
+AS $$
+BEGIN
+    IF p_admission_id IS NULL OR btrim(p_admission_id) = '' THEN
+        RETURN FALSE;
+    END IF;
+    RETURN EXISTS (
+        SELECT 1 FROM dq.apply_log WHERE admission_id = p_admission_id
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION dq.admission_consumed(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION dq.admission_consumed(TEXT) TO dq_apply;
