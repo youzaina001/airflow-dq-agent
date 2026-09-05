@@ -123,6 +123,7 @@ def _approval(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
+        decided_at=NOW,
         review_fingerprint=review.fingerprint,
     )
     event = decision_event(
@@ -155,17 +156,6 @@ def _admit(
         now=now,
         report=report,
         audit_repository=repository,
-    )
-    return decision.model_copy(
-        update={
-            "fingerprint": decision_payload_fingerprint(
-                decision_id=decision.decision_id,
-                decision=decision.decision,
-                actor=decision.actor,
-                note=decision.note,
-                decided_at=decision.decided_at,
-            )
-        }
     )
 
 
