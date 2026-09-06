@@ -252,6 +252,13 @@ CHECK_SPECS: dict[str, CheckSpec] = {
 }
 
 
+def register_check(spec: CheckSpec) -> None:
+    """Add one check spec to the process-wide catalog."""
+    if spec.check_id in CHECK_SPECS:
+        raise ValueError(f"check_id {spec.check_id!r} is already registered")
+    CHECK_SPECS[spec.check_id] = spec
+
+
 def get_check_spec(check_id: str) -> CheckSpec:
     if check_id not in CHECK_SPECS:
         raise KeyError(f"Unknown check_id {check_id!r}")

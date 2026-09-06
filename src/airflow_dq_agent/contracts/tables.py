@@ -196,6 +196,14 @@ TABLE_CONTRACTS: dict[str, TableContract] = {
 }
 
 
+def register_contract(contract: TableContract) -> None:
+    """Add one table contract to the process-wide catalog."""
+    key = contract.table.split(".")[-1]
+    if key in TABLE_CONTRACTS:
+        raise ValueError(f"table {key!r} is already registered")
+    TABLE_CONTRACTS[key] = contract
+
+
 def get_table_contract(table: str) -> TableContract:
     key = table.split(".")[-1]
     if key not in TABLE_CONTRACTS:
