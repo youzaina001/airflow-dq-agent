@@ -221,7 +221,7 @@ or seeded row values while proposal, compilation, and evaluation still pass.
 src/airflow_dq_agent/
   contracts/             # table, check-result, proposal, and remediation contracts
   quality/               # deterministic Polars/Pandera quality suite
-  catalog/               # transport-free catalog plus FastMCP adapter
+  catalog/               # transport-free catalog plus empty FastMCP adapter
   agent/                 # stub, replay, and opt-in read-only live proposal paths
   evals/                 # deterministic proposal scorers and gates
   action_definitions.py  # governed action ownership and registration
@@ -229,7 +229,7 @@ src/airflow_dq_agent/
   apply/                 # transactional executor
   traces/                # append-only JSONL and optional Postgres mirror
   warehouse/             # DSN/engine helpers (no demo schema)
-  demo/                  # optional synthetic warehouse, seed, and fixtures
+  demo/                  # optional synthetic warehouse, seed, fixtures, and catalog MCP
   load.py                # YAML registry loader
 dags/dq_daily.py         # Airflow TaskFlow orchestration and HITL boundary
 evals/cases/             # portable deterministic evaluation cases
