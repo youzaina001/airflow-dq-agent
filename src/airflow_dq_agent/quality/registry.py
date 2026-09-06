@@ -64,6 +64,22 @@ class CheckSpec(BaseModel):
             or not any(foreign_key[0] == self.column for foreign_key in contract.foreign_keys)
         ):
             raise ValueError(f"{self.check_id} column is not a contracted foreign key")
+        self._assert_policies_are_bindable()
+
+    def _assert_policies_are_bindable(self) -> None:
+        # CHECK_SPECS is assigned only after every shipped spec is constructed.
+        import airflow_dq_agent.quality.registry as quality_registry
+
+        if not hasattr(quality_registry, "CHECK_SPECS"):
+            return
+        try:
+            from airflow_dq_agent.action_definitions import _GOVERNED_ACTIONS, get_governed_action
+        except ImportError:
+            return
+        if not _GOVERNED_ACTIONS:
+            return
+        for policy in self.policies:
+            get_governed_action(policy.action_id).derive_params(self)
 
     def rule_for(self, action_id: str) -> CheckPolicy | None:
         return next((policy for policy in self.policies if policy.action_id == action_id), None)
@@ -72,9 +88,13 @@ class CheckSpec(BaseModel):
         return rows_failing_spec(self, frames)
 
 
+DEDUPE_KEEP_MIN_PK_TABLES = frozenset({"fact_orders", "dim_patient", "dim_customer"})
+
+
 def _policies(
     dimension: Dimension,
     *,
+    table: str,
     business_key: list[str] | None = None,
 ) -> list[CheckPolicy]:
     """The only actions the compiler may select for a check.
@@ -89,6 +109,8 @@ def _policies(
     if dimension is Dimension.UNIQUENESS:
         if not business_key:
             raise ValueError("uniqueness policy requires a business_key")
+        if table not in DEDUPE_KEEP_MIN_PK_TABLES:
+            return [CheckPolicy(action_id="no_op_alert")]
         return [
             CheckPolicy(action_id="dedupe_keep_min_pk", parameters={"business_key": business_key})
         ]
@@ -121,7 +143,7 @@ def _spec(
         window_start_column=window_start_column,
         window_end_column=window_end_column,
         business_key=business_key,
-        policies=_policies(dimension, business_key=business_key),
+        policies=_policies(dimension, table=table, business_key=business_key),
     )
 
 
@@ -256,3 +278,18 @@ def get_check_spec(check_id: str) -> CheckSpec:
     if check_id not in CHECK_SPECS:
         raise KeyError(f"Unknown check_id {check_id!r}")
     return CHECK_SPECS[check_id]
+
+
+def _validate_shipped_check_policies() -> None:
+    try:
+        from airflow_dq_agent.action_definitions import _GOVERNED_ACTIONS, get_governed_action
+    except ImportError:
+        return
+    if not _GOVERNED_ACTIONS:
+        return
+    for spec in CHECK_SPECS.values():
+        for policy in spec.policies:
+            get_governed_action(policy.action_id).derive_params(spec)
+
+
+_validate_shipped_check_policies()
