@@ -13,6 +13,10 @@
 - The synthetic demo warehouse, fixtures, and seed live in
   `airflow_dq_agent.demo`. Importing the governance core no longer registers
   demo tables or checks.
+- Compose and `make catalog` run `python -m airflow_dq_agent.demo.catalog`,
+  which registers the synthetic warehouse before starting the generic MCP
+  server. `airflow_dq_agent.catalog.mcp_server` still starts with empty
+  catalogs.
 
 ## 0.1.0
 

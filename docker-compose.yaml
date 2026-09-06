@@ -110,7 +110,7 @@ services:
     ports:
       - "8000:8000"
     command: >
-      python -m airflow_dq_agent.catalog.mcp_server
+      python -m airflow_dq_agent.demo.catalog
     depends_on:
       warehouse:
         condition: service_healthy
