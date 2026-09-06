@@ -144,6 +144,17 @@ def review_event(
     )
 
 
+def human_decision_fingerprint(decision: HumanDecision) -> str:
+    """Canonical fingerprint of one Human Decision payload."""
+    return decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
+    )
+
+
 def decision_event(
     quality_run_id: str,
     decision: HumanDecision,
@@ -159,13 +170,7 @@ def decision_event(
         "Reject": "human_rejected",
         "Timeout": "human_timed_out",
     }.get(decision.decision, "human_rejected")
-    decision_fingerprint = decision_payload_fingerprint(
-        decision_id=decision.decision_id,
-        decision=decision.decision,
-        actor=decision.actor,
-        note=decision.note,
-        decided_at=decision.decided_at,
-    )
+    decision_fingerprint = human_decision_fingerprint(decision)
     return _event(
         kind,  # type: ignore[arg-type]
         quality_run_id=quality_run_id,
