@@ -24,10 +24,11 @@ from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.integrity import verify_report_integrity
+from airflow_dq_agent.planning.review import build_approval_review, render_approval_review_body
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite, sample_free_report
-from airflow_dq_agent.traces import append_event, candidate_proposal_event
-from airflow_dq_agent.traces.lineage import evaluation_event, plan_event
+from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candidate_proposal_event
+from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
 
 settings = get_settings()
@@ -106,11 +107,17 @@ def dq_daily() -> None:
         event = evaluation_event(plan, evaluation, str(plan_data["plan_event_id"]))
         append_event(event)
         evaluation = evaluation.model_copy(update={"audit_event_id": event.event_id})
+        review = build_approval_review(plan, evaluation, ttl=settings.apply_admission_ttl)
+        review_audit = review_event(review, evaluation, event)
+        append_event(review_audit)
         return {
             "plan": plan.model_dump(mode="json"),
             "plan_event_id": plan_data["plan_event_id"],
             "evaluation": evaluation.model_dump(mode="json"),
             "evaluation_event_id": event.event_id,
+            "approval_review": review.model_dump(mode="json"),
+            "approval_review_body": render_approval_review_body(review),
+            "review_event_id": review_audit.event_id,
         }
 
     report = run_suite_task()
@@ -148,6 +155,9 @@ def dq_daily() -> None:
                 parsed_decision,
                 report=report,
                 ttl=settings.apply_admission_ttl,
+                audit_repository=PostgresAuditRepository(
+                    settings.audit_dsn or settings.warehouse_dsn
+                ),
             ).model_dump(mode="json")
 
         @task
@@ -174,10 +184,24 @@ def dq_daily() -> None:
         approval = AuditedApprovalOperator(
             task_id="approve_remediation_plan",
             subject="Approve governed DQ remediation plan",
-            body="Evaluation passed. Approve the whole plan or reject it. A note is required.",
+            # HITL body is a string; the sample-free review is rendered upstream.
+            body="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review_body'] }}",
             quality_run_id="{{ ti.xcom_pull(task_ids='run_suite_task')['run_id'] }}",
             predecessor_event_id=(
-                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation_event_id'] }}"
+                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['review_event_id'] }}"
+            ),
+            plan_id="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['plan_id'] }}",
+            plan_fingerprint=(
+                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['fingerprint'] }}"
+            ),
+            review_fingerprint=(
+                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review']['fingerprint'] }}"
+            ),
+            evaluation_id=(
+                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['evaluation_id'] }}"
+            ),
+            evaluation_fingerprint=(
+                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['fingerprint'] }}"
             ),
             approver_ids=settings.hitl_approver_id_set,
             audit_dsn=settings.audit_dsn,
