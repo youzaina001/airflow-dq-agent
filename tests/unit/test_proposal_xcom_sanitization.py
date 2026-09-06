@@ -5,7 +5,12 @@ import json
 import pytest
 
 from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
-from airflow_dq_agent.contracts import Proposal, QualitySuiteReport
+from airflow_dq_agent.contracts import (
+    CandidateAction,
+    Proposal,
+    QualityEvidence,
+    QualitySuiteReport,
+)
 from airflow_dq_agent.evals import evaluate_proposal
 from airflow_dq_agent.quality import seeded_failure_report
 
@@ -69,3 +74,26 @@ def test_unbounded_authority_identifier_fails_before_xcom(field: str) -> None:
         safe_proposal_for_xcom(report, proposal)
 
     assert SAMPLED_VALUE not in str(exc_info.value)
+
+
+def test_policy_illegal_governed_action_fails_before_xcom() -> None:
+    report = seeded_failure_report()
+    failed = report.get("fact_orders.total_amount.completeness")
+    assert failed is not None
+    proposal = Proposal(
+        summary="Fill missing totals.",
+        root_cause_hypothesis="An unreviewed fill was requested.",
+        candidate_actions=[
+            CandidateAction(
+                action_id="null_fill",
+                evidence=[
+                    QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                ],
+                rationale="Catalogued but not declared by Check Policy.",
+            )
+        ],
+        confidence=0.1,
+    )
+
+    with pytest.raises(PermissionError, match="unbounded candidate proposal"):
+        safe_proposal_for_xcom(report, proposal)
