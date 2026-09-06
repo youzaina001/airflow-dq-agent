@@ -6,8 +6,8 @@ import pytest
 
 from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
 from airflow_dq_agent.contracts import Proposal, QualitySuiteReport
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
-from airflow_dq_agent.quality import seeded_failure_report
 
 SAMPLED_VALUE = "customer-raw-value@example.invalid"
 

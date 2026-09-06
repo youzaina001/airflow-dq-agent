@@ -50,6 +50,12 @@ def restore_registries() -> None:
     CHECK_SPECS.update(checks)
 
 
+def test_examples_warehouse_yaml_loads() -> None:
+    load_registry(Path(__file__).resolve().parents[2] / "examples" / "my_warehouse.yaml")
+    assert get_table_contract("ext_invoice").primary_key == ["invoice_id"]
+    assert get_check_spec("ext_invoice.amount.completeness").rule_for("quarantine_nulls")
+
+
 def test_load_registry_registers_tables_and_checks(tmp_path: Path) -> None:
     path = tmp_path / "registry.yaml"
     path.write_text(_INVOICE_YAML)

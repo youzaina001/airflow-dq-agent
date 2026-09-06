@@ -19,7 +19,13 @@ from airflow_dq_agent.contracts.models import (
     TargetSet,
     ToolCallRecord,
 )
-from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS, TableContract, get_table_contract
+from airflow_dq_agent.contracts.tables import (
+    TABLE_CONTRACTS,
+    ColumnContract,
+    TableContract,
+    get_table_contract,
+    register_contract,
+)
 
 __all__ = [
     "TABLE_CONTRACTS",
@@ -28,6 +34,7 @@ __all__ = [
     "CandidateAction",
     "CheckResult",
     "Citation",
+    "ColumnContract",
     "DestructiveRank",
     "Dimension",
     "EvalReport",
@@ -44,4 +51,5 @@ __all__ = [
     "TargetSet",
     "ToolCallRecord",
     "get_table_contract",
+    "register_contract",
 ]

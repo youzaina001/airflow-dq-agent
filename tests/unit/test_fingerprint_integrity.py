@@ -26,6 +26,7 @@ from airflow_dq_agent.contracts.models import (
     RemediationPlan,
     TargetSet,
 )
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan, current_policy_fingerprint
 from airflow_dq_agent.planning.admission import create_apply_admission
@@ -38,7 +39,6 @@ from airflow_dq_agent.planning.integrity import (
     warehouse_environment_id,
 )
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
-from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces.lineage import decision_event, quality_report_event
 

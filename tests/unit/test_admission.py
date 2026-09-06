@@ -14,12 +14,12 @@ from airflow_dq_agent.contracts import (
     TargetSet,
 )
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.hitl import audit_approval_decision
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
-from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces.lineage import quality_report_event
 

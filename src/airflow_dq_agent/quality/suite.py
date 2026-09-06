@@ -22,7 +22,6 @@ from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckSpec
 from airflow_dq_agent.warehouse.db import make_engine
 
 SAMPLE = 20
-TABLES = tuple(TABLE_CONTRACTS)
 
 
 def _result(

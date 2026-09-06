@@ -1,9 +1,9 @@
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.hitl import (
     audit_approval_decision,
     audit_then_complete_approval,
     parse_approval_output,
 )
-from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces import quality_report_event
 
 

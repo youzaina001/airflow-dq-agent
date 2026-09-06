@@ -1,10 +1,10 @@
 """The XCom boundary is an allow-list: named Quality Evidence fields only."""
 
 from airflow_dq_agent.contracts.models import QualitySuiteReport
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.quality import (
     project_report_for_xcom,
     sample_free_report,
-    seeded_failure_report,
 )
 from airflow_dq_agent.quality.sanitize import XCOM_CHECK_FIELDS, XCOM_REPORT_FIELDS
 
