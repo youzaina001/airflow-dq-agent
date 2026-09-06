@@ -80,6 +80,14 @@ def register_check(spec: CheckSpec) -> None:
     if spec.check_id in CHECK_SPECS:
         raise ValueError(f"check_id {spec.check_id!r} is already registered")
     CHECK_SPECS[spec.check_id] = spec
+    try:
+        from airflow_dq_agent.action_definitions import get_governed_action
+
+        for policy in spec.policies:
+            get_governed_action(policy.action_id).derive_params(spec)
+    except (KeyError, ValueError):
+        del CHECK_SPECS[spec.check_id]
+        raise
 
 
 def get_check_spec(check_id: str) -> CheckSpec:

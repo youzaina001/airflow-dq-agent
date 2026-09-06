@@ -89,7 +89,7 @@ services:
       - "5433:5432"
     volumes:
       - warehouse_pg:/var/lib/postgresql/data
-      - ./src/airflow_dq_agent/warehouse/ddl.sql:/docker-entrypoint-initdb.d/01_ddl.sql:ro
+      - ./src/airflow_dq_agent/demo/ddl.sql:/docker-entrypoint-initdb.d/01_ddl.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "dq", "-d", "warehouse"]
       interval: 10s

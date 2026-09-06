@@ -311,10 +311,7 @@ checks:
   dimension: uniqueness
   description: sku is unique
   policies:
-  - action_id: dedupe_keep_min_pk
-    parameters:
-      business_key:
-      - sku
+  - action_id: no_op_alert
   business_key:
   - sku
 - check_id: dim_patient.site_sk.referential_integrity
