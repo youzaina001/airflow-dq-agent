@@ -12,7 +12,7 @@ from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.quality import run_suite_on_frames
 from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckSpec, get_check_spec
-from airflow_dq_agent.quality.suite import TABLES, load_frames
+from airflow_dq_agent.quality.suite import load_frames
 
 
 def _contracted_frames() -> dict[str, pl.DataFrame]:
@@ -324,7 +324,7 @@ def test_load_frames_omits_undefined_warehouse_tables(monkeypatch: pytest.Monkey
 
     loaded = load_frames(_StubEngine())  # type: ignore[arg-type]
     assert "fact_orders" not in loaded
-    assert set(loaded) == set(TABLES) - {"fact_orders"}
+    assert set(loaded) == set(TABLE_CONTRACTS) - {"fact_orders"}
 
     report = run_suite_on_frames(loaded)
     drift = report.get("fact_orders.schema_drift")

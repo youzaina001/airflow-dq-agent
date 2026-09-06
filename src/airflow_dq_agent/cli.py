@@ -16,11 +16,10 @@ from airflow_dq_agent.contracts.models import (
     QualityEvidence,
     QualitySuiteReport,
 )
+from airflow_dq_agent.demo import green_report, register_demo, seed_warehouse, seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
-from airflow_dq_agent.quality.fixtures import green_report, seeded_failure_report
 from airflow_dq_agent.quality.suite import run_quality_suite
 from airflow_dq_agent.traces import trace_agent_run
-from airflow_dq_agent.warehouse.seed import seed_warehouse
 
 
 def _report(no_db: bool) -> QualitySuiteReport:
@@ -109,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    register_demo()
     if args.command == "seed":
         seed_warehouse()
         print("seeded warehouse with deterministic quality defects")
