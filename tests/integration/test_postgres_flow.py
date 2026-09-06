@@ -11,10 +11,16 @@ from airflow_dq_agent.contracts.models import CheckStatus, ExecutablePlanItem, H
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
+from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite
-from airflow_dq_agent.traces import append_event, append_human_decision, candidate_proposal_event
-from airflow_dq_agent.traces.lineage import evaluation_event, plan_event
+from airflow_dq_agent.traces import (
+    InMemoryAuditRepository,
+    append_event,
+    append_human_decision,
+    candidate_proposal_event,
+)
+from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
 from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.warehouse.seed import seed_warehouse
@@ -43,26 +49,44 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
     assert evaluation.passed
     evaluation_audit_event = evaluation_event(plan, evaluation, plan_audit_event)
     append_event(evaluation_audit_event)
+    evaluation = evaluation.model_copy(update={"audit_event_id": evaluation_audit_event.event_id})
+    review = build_approval_review(plan, evaluation)
+    review_audit_event = review_event(review, evaluation, evaluation_audit_event)
+    append_event(review_audit_event)
     decision = HumanDecision(
-        decision="Approve", actor="integration-test", note="Reviewed deterministic target sets."
+        decision="Approve",
+        actor="integration-test",
+        note="Reviewed deterministic target sets.",
+        review_fingerprint=review.fingerprint,
     )
     with pytest.raises(PermissionError, match="human decision has no durable audit event"):
-        create_apply_admission(plan, evaluation, decision, report=report)
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            audit_repository=InMemoryAuditRepository(),
+        )
 
-    decision_audit_event = append_human_decision(report.run_id, evaluation_audit_event, decision)
-    audited_decision = decision.model_copy(
-        update={
-            "audit_event_id": decision_audit_event.event_id,
-            "fingerprint": decision_audit_event.decision_fingerprint,
-        }
+    decision_audit_event = append_human_decision(
+        report.run_id,
+        review_audit_event,
+        decision,
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
     )
+    audited_decision = decision.model_copy(update={"audit_event_id": decision_audit_event.event_id})
     admission = create_apply_admission(
         plan,
         evaluation,
         audited_decision,
         report=report,
+        audit_repository=InMemoryAuditRepository([review_audit_event, decision_audit_event]),
     )
-    assert decision_audit_event.predecessor_ids == [evaluation_audit_event.event_id]
+    assert decision_audit_event.predecessor_ids == [review_audit_event.event_id]
+    assert review_audit_event.predecessor_ids == [evaluation_audit_event.event_id]
     assert admission.decision_event_id == decision_audit_event.event_id
     dry_run = apply_plan(
         plan,
