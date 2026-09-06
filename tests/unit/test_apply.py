@@ -206,6 +206,7 @@ def _approved_quarantine_plan(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
+        decided_at=now,
         review_fingerprint=review.fingerprint,
     )
     event = decision_event(
@@ -321,6 +322,7 @@ def test_apply_uses_each_governed_action_mutation_capability(
         decision="Approve",
         actor="approver-1",
         note="Reviewed target set.",
+        decided_at=now,
         review_fingerprint=review.fingerprint,
     )
     event = decision_event(

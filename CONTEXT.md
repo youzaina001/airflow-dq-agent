@@ -37,5 +37,5 @@ The durable authorization to execute one evaluated remediation plan after its wh
 _Avoid_: Approval, permission
 
 **Human Decision**:
-An attributable, authorized response on one remediation plan. Approval and non-human timeout are distinct outcomes.
+An attributable, authorized response on one evaluated remediation plan, bound to that plan's identity and Audit Lineage event. Approval and non-human timeout are distinct outcomes.
 _Avoid_: Approval, button click
