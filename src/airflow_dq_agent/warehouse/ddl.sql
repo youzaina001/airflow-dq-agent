@@ -199,6 +199,7 @@ $$;
 GRANT USAGE ON SCHEMA warehouse, dq TO dq_read, dq_audit, dq_apply;
 GRANT SELECT ON ALL TABLES IN SCHEMA warehouse TO dq_read, dq_apply;
 GRANT INSERT ON dq.traces, dq.check_runs TO dq_audit;
+GRANT SELECT ON dq.traces TO dq_audit;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA dq TO dq_audit;
 GRANT INSERT ON dq.quarantine_rows TO dq_apply;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA dq TO dq_apply;

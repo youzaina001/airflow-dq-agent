@@ -314,11 +314,56 @@ class EvalReport(BaseModel):
         return self.score_map().get(name)
 
 
+class ApprovalReviewItem(BaseModel):
+    """One executable item as shown for whole-plan review; never carries row values."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: str = Field(min_length=1)
+    table: str = Field(min_length=1)
+    evidence_check_ids: list[str] = Field(min_length=1)
+    target_count: int = Field(ge=0)
+    target_fingerprint: str = Field(min_length=1)
+    mutates: bool
+    reversible: bool
+
+
+class ApprovalReviewScore(BaseModel):
+    """Evaluation score as shown for whole-plan review; omits free-form details."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    score: float = Field(ge=0.0, le=1.0)
+    passed: bool
+    rationale: str
+
+
+class ApprovalReview(BaseModel):
+    """Sample-free plan review shown before a Human Decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str = Field(min_length=1)
+    plan_fingerprint: str = Field(min_length=1)
+    policy_fingerprint: str = Field(min_length=1)
+    quality_run_id: str = Field(min_length=1)
+    items: list[ApprovalReviewItem]
+    evaluation_id: str = Field(min_length=1)
+    evaluation_fingerprint: str = Field(min_length=1)
+    evaluation_passed: bool
+    evaluation_scores: list[ApprovalReviewScore]
+    admission_ttl_hours: float = Field(gt=0)
+    expiry_guidance: str = Field(min_length=1)
+    fingerprint: str = Field(min_length=1)
+
+
 class HumanDecision(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str | None = None
+    review_fingerprint: str | None = None
     audit_event_id: str | None = None
     decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     decision: Literal["Approve", "Reject", "Timeout", "shadow_skip"]
@@ -345,6 +390,7 @@ class AuditEvent(BaseModel):
         "plan_compiled",
         "plan_blocked",
         "evaluation",
+        "approval_review",
         "human_approved",
         "human_rejected",
         "human_timed_out",
@@ -366,6 +412,8 @@ class AuditEvent(BaseModel):
     target_set_fingerprint: str | None = None
     evaluation_id: str | None = None
     evaluation_fingerprint: str | None = None
+    review_fingerprint: str | None = None
+    review_payload: dict[str, Any] | None = None
     decision_id: str | None = None
     decision_fingerprint: str | None = None
     decision_outcome: str | None = None
