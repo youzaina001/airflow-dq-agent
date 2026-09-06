@@ -33,9 +33,9 @@ The immutable association from a quality suite report through its remediation pl
 _Avoid_: Log, history
 
 **Apply Admission**:
-The durable authorization to execute one evaluated remediation plan after its whole-plan human decision. It cannot authorize a different plan or report.
+The durable, single-use authorization to execute one evaluated remediation plan after its whole-plan human decision. It cannot authorize a different plan or report, and it cannot be consumed twice.
 _Avoid_: Approval, permission
 
 **Human Decision**:
-An attributable, authorized response on one remediation plan. Approval and non-human timeout are distinct outcomes.
+An attributable, authorized response on one evaluated remediation plan, bound to that plan's identity and Audit Lineage event. Approval and non-human timeout are distinct outcomes.
 _Avoid_: Approval, button click

@@ -1,9 +1,11 @@
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 
 from airflow_dq_agent.apply import apply_plan
 from airflow_dq_agent.contracts import (
+    AuditEvent,
     CandidateAction,
     EvalReport,
     HumanDecision,
@@ -19,9 +21,10 @@ from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.hitl import audit_approval_decision
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
-from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
+from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.registry import CHECK_SPECS
-from airflow_dq_agent.traces.lineage import quality_report_event
+from airflow_dq_agent.traces import InMemoryAuditRepository, PostgresAuditRepository
+from airflow_dq_agent.traces.lineage import decision_event, quality_report_event, review_event
 
 
 class _TargetSets:
@@ -55,29 +58,55 @@ def _evaluated_plan() -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     return plan, evaluate_plan(plan), scoped_report
 
 
-def _with_decision_fingerprint(decision: HumanDecision) -> HumanDecision:
-    return decision.model_copy(
-        update={
-            "fingerprint": decision_payload_fingerprint(
-                decision_id=decision.decision_id,
-                decision=decision.decision,
-                actor=decision.actor,
-                note=decision.note,
-                decided_at=decision.decided_at,
-            )
-        }
+def _bound_approval(
+    plan: RemediationPlan,
+    evaluation: EvalReport,
+    *,
+    actor: str = "approver-1",
+    note: str = "Reviewed target set.",
+    ttl: timedelta = timedelta(hours=24),
+    decided_at: datetime | None = None,
+    quality_run_id: str | None = None,
+    plan_id: str | None = None,
+    plan_fingerprint: str | None = None,
+    review_fingerprint: str | None = None,
+    outcome: Literal["Approve", "Reject", "Timeout"] = "Approve",
+) -> tuple[HumanDecision, InMemoryAuditRepository]:
+    review = build_approval_review(plan, evaluation, ttl=ttl)
+    shown = review_event(review, evaluation, "evaluation-event-1")
+    decision_kwargs: dict[str, object] = {
+        "decision": outcome,
+        "actor": actor,
+        "note": note,
+        "review_fingerprint": review.fingerprint
+        if review_fingerprint is None
+        else review_fingerprint,
+    }
+    if decided_at is not None:
+        decision_kwargs["decided_at"] = decided_at
+    decision = HumanDecision(**decision_kwargs)  # type: ignore[arg-type]
+    event = decision_event(
+        quality_run_id or plan.quality_run_id,
+        decision,
+        shown,
+        plan_id=plan.plan_id if plan_id is None else plan_id,
+        plan_fingerprint=plan.fingerprint if plan_fingerprint is None else plan_fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
+    )
+    return (
+        decision.model_copy(update={"audit_event_id": event.event_id}),
+        InMemoryAuditRepository([shown, event]),
     )
 
 
-def _audited_approval() -> HumanDecision:
-    return _with_decision_fingerprint(
-        HumanDecision(
-            decision="Approve",
-            actor="approver-1",
-            note="Reviewed target set.",
-            audit_event_id="decision-event-1",
-        )
-    )
+def _assert_refusal_is_safe(exc: BaseException) -> None:
+    message = str(exc)
+    lowered = message.lower()
+    assert "sample" not in lowered
+    assert "sample_failures" not in lowered
+    assert "9001" not in message
+    assert "shippped" not in lowered
 
 
 def test_unaudited_human_decision_cannot_create_apply_admission() -> None:
@@ -89,6 +118,7 @@ def test_unaudited_human_decision_cannot_create_apply_admission() -> None:
             evaluation,
             HumanDecision(decision="Approve", actor="approver-1", note="Reviewed target set."),
             report=report,
+            audit_repository=InMemoryAuditRepository(),
         )
 
 
@@ -107,28 +137,294 @@ def test_blank_audit_event_id_cannot_create_apply_admission(audit_event_id: str)
                 audit_event_id=audit_event_id,
             ),
             report=report,
+            audit_repository=InMemoryAuditRepository(),
         )
 
 
-def test_audited_approval_receives_time_bounded_apply_admission() -> None:
+def test_admission_fails_closed_without_audit_lineage_lookup() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    review = build_approval_review(plan, evaluation)
+
+    with pytest.raises(PermissionError, match="audit lineage lookup is required") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            HumanDecision(
+                decision="Approve",
+                actor="approver-1",
+                note="Reviewed target set.",
+                review_fingerprint=review.fingerprint,
+                audit_event_id="decision-event-1",
+            ),
+            report=report,
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_fabricated_decision_event_is_refused_without_a_repository_hit() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    review = build_approval_review(plan, evaluation)
+
+    with pytest.raises(PermissionError, match="audit event was not found") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            HumanDecision(
+                decision="Approve",
+                actor="approver-1",
+                note="Reviewed target set.",
+                review_fingerprint=review.fingerprint,
+                audit_event_id="decision-event-1",
+            ),
+            report=report,
+            audit_repository=InMemoryAuditRepository(),
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+@pytest.mark.parametrize("outcome", ["Reject", "Timeout"])
+def test_non_approval_cannot_create_apply_admission(outcome: str) -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(plan, evaluation, outcome=outcome)
+
+    with pytest.raises(PermissionError, match="not an approval") as refused:
+        create_apply_admission(
+            plan, evaluation, decision, report=report, audit_repository=repository
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_reject_audit_event_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    review = build_approval_review(plan, evaluation)
+    rejected = HumanDecision(
+        decision="Reject",
+        actor="approver-1",
+        note="Needs another look.",
+        fingerprint=review.fingerprint,
+    )
+    event = decision_event(
+        plan.quality_run_id,
+        rejected,
+        "evaluation-event-1",
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+    )
+    forged = rejected.model_copy(update={"decision": "Approve", "audit_event_id": event.event_id})
+
+    with pytest.raises(PermissionError, match="not a human approval") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            forged,
+            report=report,
+            audit_repository=InMemoryAuditRepository([event]),
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_timeout_audit_event_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    review = build_approval_review(plan, evaluation)
+    timed_out = HumanDecision(
+        decision="Timeout",
+        actor="airflow-timeout",
+        note="waited",
+        fingerprint=review.fingerprint,
+    )
+    event = decision_event(
+        plan.quality_run_id,
+        timed_out,
+        "evaluation-event-1",
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+    )
+    forged = HumanDecision(
+        decision="Approve",
+        actor="approver-1",
+        note="Reviewed target set.",
+        fingerprint=review.fingerprint,
+        audit_event_id=event.event_id,
+    )
+
+    with pytest.raises(PermissionError, match="not a human approval") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            forged,
+            report=report,
+            audit_repository=InMemoryAuditRepository([event]),
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_approval_for_another_plan_or_run_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, other_run = _bound_approval(plan, evaluation, quality_run_id="other-quality-run")
+    with pytest.raises(PermissionError, match="does not belong to this quality run") as refused:
+        create_apply_admission(
+            plan, evaluation, decision, report=report, audit_repository=other_run
+        )
+    _assert_refusal_is_safe(refused.value)
+
+    decision, other_plan = _bound_approval(plan, evaluation, plan_id="other-plan")
+    with pytest.raises(
+        PermissionError, match="does not belong to this remediation plan"
+    ) as refused:
+        create_apply_admission(
+            plan, evaluation, decision, report=report, audit_repository=other_plan
+        )
+    _assert_refusal_is_safe(refused.value)
+
+    decision, other_fp = _bound_approval(plan, evaluation, plan_fingerprint="sha256:other")
+    with pytest.raises(
+        PermissionError, match="does not belong to this remediation plan"
+    ) as refused:
+        create_apply_admission(plan, evaluation, decision, report=report, audit_repository=other_fp)
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_approval_for_another_evaluation_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    other = evaluation.model_copy(update={"evaluation_id": "other-evaluation"})
+    assert other.fingerprint == evaluation.fingerprint
+    decision, repository = _bound_approval(plan, evaluation)
+
+    with pytest.raises(PermissionError, match="evaluation") as refused:
+        create_apply_admission(plan, other, decision, report=report, audit_repository=repository)
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_approval_with_mismatched_decision_id_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(plan, evaluation)
+    swapped = decision.model_copy(update={"decision_id": "forged-decision"})
+
+    with pytest.raises(PermissionError, match="does not match audit lineage") as refused:
+        create_apply_admission(
+            plan, evaluation, swapped, report=report, audit_repository=repository
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_approval_event_with_non_approve_outcome_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(plan, evaluation)
+    event = repository.get(decision.audit_event_id or "")
+    assert event is not None
+    lying = event.model_copy(update={"decision_outcome": "Reject"})
+
+    with pytest.raises(PermissionError, match="not a human approval") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            audit_repository=InMemoryAuditRepository([lying]),
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_postgres_audit_repository_returns_none_for_missing_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _EmptyResult:
+        def first(self) -> None:
+            return None
+
+    class _Connection:
+        def execute(self, statement: object, params: object = None) -> _EmptyResult:
+            del statement, params
+            return _EmptyResult()
+
+        def __enter__(self) -> object:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    class _Engine:
+        def connect(self) -> _Connection:
+            return _Connection()
+
+    monkeypatch.setattr(
+        "airflow_dq_agent.traces.repository.make_engine", lambda *_a, **_k: _Engine()
+    )
+
+    assert PostgresAuditRepository("postgresql+psycopg://unused").get("decision-event-1") is None
+
+
+def test_approval_from_another_actor_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(plan, evaluation, actor="approver-1")
+    swapped = decision.model_copy(update={"actor": "approver-2"})
+
+    with pytest.raises(PermissionError, match="actor does not match audit lineage") as refused:
+        create_apply_admission(
+            plan, evaluation, swapped, report=report, audit_repository=repository
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_approval_with_mismatched_review_fingerprint_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(
+        plan, evaluation, review_fingerprint="sha256:not-the-review"
+    )
+
+    with pytest.raises(PermissionError, match="does not bind the reviewed plan") as refused:
+        create_apply_admission(
+            plan, evaluation, decision, report=report, audit_repository=repository
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_audited_approval_of_the_shown_review_receives_time_bounded_apply_admission() -> None:
     plan, evaluation, report = _evaluated_plan()
     now = datetime(2026, 8, 30, tzinfo=UTC)
+    review = build_approval_review(plan, evaluation, ttl=timedelta(hours=24))
+    review_audit = review_event(review, evaluation, "evaluation-event-1")
+    events: list[AuditEvent] = [review_audit]
+    decision = audit_approval_decision(
+        {
+            "chosen_options": ["Approve"],
+            "params_input": {"approval_note": "Reviewed target set."},
+            "responded_by_user": {"id": "approver-1"},
+            "timedout": False,
+            "responded_at": "2026-08-29T12:00:00Z",
+        },
+        approver_ids={"approver-1"},
+        quality_run_id=plan.quality_run_id,
+        predecessor=review_audit,
+        persist=events.append,
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        review_fingerprint=review.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint=evaluation.fingerprint,
+    )
 
     admission = create_apply_admission(
         plan,
         evaluation,
-        _audited_approval(),
-        report=report,
+        decision,
         now=now,
         ttl=timedelta(hours=24),
+        report=report,
+        audit_repository=InMemoryAuditRepository(events),
     )
 
     assert admission.plan_id == plan.plan_id
     assert admission.plan_fingerprint == plan.fingerprint
     assert admission.policy_fingerprint == plan.policy_fingerprint
-    assert admission.decision_event_id == "decision-event-1"
-    assert admission.expires_at == now + timedelta(hours=24)
+    assert admission.decision_event_id == decision.audit_event_id
+    assert admission.expires_at == decision.decided_at + timedelta(hours=24)
     assert admission.fingerprint
+    assert decision.review_fingerprint == review.fingerprint
+    assert decision.fingerprint != review.fingerprint
+    assert events[-1].decision_fingerprint == decision.fingerprint
+    assert events[-1].review_fingerprint == review.fingerprint
+    assert events[-1].evaluation_id == evaluation.evaluation_id
 
     with pytest.raises(PermissionError, match="expired"):
         apply_plan(
@@ -144,15 +440,126 @@ def test_audited_approval_receives_time_bounded_apply_admission() -> None:
         apply_plan(plan, evaluation, report=report, dry_run=False)
 
 
+def test_approval_with_rewritten_decided_at_cannot_extend_admission_ttl() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decided_at = datetime(2026, 8, 29, 12, tzinfo=UTC)
+    decision, repository = _bound_approval(plan, evaluation, decided_at=decided_at)
+    stretched = decision.model_copy(update={"decided_at": datetime(2026, 8, 30, 12, tzinfo=UTC)})
+
+    with pytest.raises(PermissionError, match="fingerprint does not match") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            stretched,
+            report=report,
+            now=datetime(2026, 8, 30, tzinfo=UTC),
+            ttl=timedelta(hours=24),
+            audit_repository=repository,
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_apply_admission_ttl_starts_from_the_human_decision() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decided_at = datetime(2026, 8, 29, 12, tzinfo=UTC)
+    issued_at = datetime(2026, 8, 30, tzinfo=UTC)
+    decision, repository = _bound_approval(plan, evaluation, decided_at=decided_at)
+
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        decision,
+        report=report,
+        now=issued_at,
+        ttl=timedelta(hours=24),
+        audit_repository=repository,
+    )
+
+    assert admission.issued_at == issued_at
+    assert admission.expires_at == decided_at + timedelta(hours=24)
+    with pytest.raises(PermissionError, match="expired"):
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            now=decided_at + timedelta(hours=24, seconds=1),
+            ttl=timedelta(hours=24),
+            audit_repository=repository,
+        )
+
+
+def test_future_human_decision_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    ttl = timedelta(hours=24)
+    issued_at = datetime(2026, 9, 1, tzinfo=UTC)
+    future, future_repo = _bound_approval(
+        plan, evaluation, decided_at=datetime(2026, 9, 2, tzinfo=UTC)
+    )
+
+    with pytest.raises(PermissionError, match="after admission time") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            future,
+            report=report,
+            now=issued_at,
+            ttl=ttl,
+            audit_repository=future_repo,
+        )
+    _assert_refusal_is_safe(refused.value)
+
+    on_time, on_time_repo = _bound_approval(plan, evaluation, decided_at=issued_at)
+    admission = create_apply_admission(
+        plan,
+        evaluation,
+        on_time,
+        report=report,
+        now=issued_at,
+        ttl=ttl,
+        audit_repository=on_time_repo,
+    )
+    assert admission.expires_at == issued_at + ttl
+
+    stale, stale_repo = _bound_approval(plan, evaluation, decided_at=issued_at - timedelta(days=30))
+    with pytest.raises(PermissionError, match="expired") as stale_refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            stale,
+            report=report,
+            now=issued_at,
+            ttl=ttl,
+            audit_repository=stale_repo,
+        )
+    _assert_refusal_is_safe(stale_refused.value)
+
+
+def test_thirty_day_old_human_decision_cannot_create_apply_admission() -> None:
+    plan, evaluation, report = _evaluated_plan()
+    decided_at = datetime(2026, 8, 1, tzinfo=UTC)
+    decision, repository = _bound_approval(plan, evaluation, decided_at=decided_at)
+
+    with pytest.raises(PermissionError, match="expired") as refused:
+        create_apply_admission(
+            plan,
+            evaluation,
+            decision,
+            report=report,
+            now=decided_at + timedelta(days=30),
+            ttl=timedelta(hours=24),
+            audit_repository=repository,
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
 def test_policy_drift_blocks_mutation_before_a_database_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan, evaluation, report = _evaluated_plan()
+    decision, repository = _bound_approval(plan, evaluation)
     admission = create_apply_admission(
-        plan,
-        evaluation,
-        _audited_approval(),
-        report=report,
+        plan, evaluation, decision, report=report, audit_repository=repository
     )
     check_id = "fact_orders.total_amount.completeness"
     spec = CHECK_SPECS[check_id]
@@ -164,44 +571,24 @@ def test_policy_drift_blocks_mutation_before_a_database_connection(
 
 def test_audited_reject_rewritten_to_approve_cannot_create_apply_admission() -> None:
     plan, evaluation, report = _evaluated_plan()
-    predecessor = quality_report_event(report)
-    events = []
-    rejected = audit_approval_decision(
-        {
-            "chosen_options": ["Reject"],
-            "params_input": {"approval_note": "Target scope needs review."},
-            "responded_by_user": {"id": "approver-1"},
-            "timedout": False,
-        },
-        approver_ids={"approver-1"},
-        quality_run_id=report.run_id,
-        predecessor=predecessor,
-        persist=events.append,
-    )
+    rejected, repository = _bound_approval(plan, evaluation, outcome="Reject")
     rewritten = rejected.model_copy(
         update={
             "decision": "Approve",
             "note": rejected.note or "Reviewed target set.",
         }
     )
-    assert rewritten.fingerprint == rejected.fingerprint
+    assert rewritten.review_fingerprint == rejected.review_fingerprint
 
     with pytest.raises(PermissionError):
-        create_apply_admission(plan, evaluation, rewritten, report=report)
+        create_apply_admission(
+            plan, evaluation, rewritten, report=report, audit_repository=repository
+        )
 
-    approved = audit_approval_decision(
-        {
-            "chosen_options": ["Approve"],
-            "params_input": {"approval_note": "Reviewed target set."},
-            "responded_by_user": {"id": "approver-1"},
-            "timedout": False,
-        },
-        approver_ids={"approver-1"},
-        quality_run_id=report.run_id,
-        predecessor=predecessor,
-        persist=events.append,
+    approved, approved_repository = _bound_approval(plan, evaluation)
+    admission = create_apply_admission(
+        plan, evaluation, approved, report=report, audit_repository=approved_repository
     )
-    admission = create_apply_admission(plan, evaluation, approved, report=report)
     assert admission.decision_id == approved.decision_id
     assert admission.decision_event_id == approved.audit_event_id
 
@@ -209,6 +596,7 @@ def test_audited_reject_rewritten_to_approve_cannot_create_apply_admission() -> 
 def test_rewritten_actor_or_note_after_audit_cannot_create_apply_admission() -> None:
     plan, evaluation, report = _evaluated_plan()
     events = []
+    review = build_approval_review(plan, evaluation)
     approved = audit_approval_decision(
         {
             "chosen_options": ["Approve"],
@@ -220,6 +608,9 @@ def test_rewritten_actor_or_note_after_audit_cannot_create_apply_admission() -> 
         quality_run_id=report.run_id,
         predecessor=quality_report_event(report),
         persist=events.append,
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        review_fingerprint=review.fingerprint,
     )
 
     for rewritten in (
@@ -228,24 +619,20 @@ def test_rewritten_actor_or_note_after_audit_cannot_create_apply_admission() -> 
     ):
         assert rewritten.fingerprint == approved.fingerprint
         with pytest.raises(PermissionError):
-            create_apply_admission(plan, evaluation, rewritten, report=report)
+            create_apply_admission(
+                plan,
+                evaluation,
+                rewritten,
+                report=report,
+                audit_repository=InMemoryAuditRepository(events),
+            )
 
 
-@pytest.mark.parametrize("fingerprint", [None, "", " "])
-def test_missing_or_blank_decision_fingerprint_cannot_create_apply_admission(
-    fingerprint: str | None,
-) -> None:
+def test_forged_decision_fingerprint_cannot_create_apply_admission() -> None:
     plan, evaluation, report = _evaluated_plan()
-    with pytest.raises(PermissionError, match="fingerprint"):
-        create_apply_admission(
-            plan,
-            evaluation,
-            HumanDecision(
-                decision="Approve",
-                actor="approver-1",
-                note="Reviewed target set.",
-                audit_event_id="decision-event-1",
-                fingerprint=fingerprint,
-            ),
-            report=report,
-        )
+    decision, repository = _bound_approval(plan, evaluation)
+    forged = decision.model_copy(update={"fingerprint": "sha256:forged-decision"})
+
+    with pytest.raises(PermissionError, match="fingerprint") as refused:
+        create_apply_admission(plan, evaluation, forged, report=report, audit_repository=repository)
+    _assert_refusal_is_safe(refused.value)

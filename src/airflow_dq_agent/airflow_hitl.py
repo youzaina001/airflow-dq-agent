@@ -47,10 +47,20 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
     is the only value supplied to plan admission.
     """
 
-    template_fields = (
-        *_ProviderApprovalOperator.template_fields,
-        "quality_run_id",
-        "predecessor_event_id",
+    template_fields = tuple(
+        dict.fromkeys(
+            (
+                *_ProviderApprovalOperator.template_fields,
+                "body",
+                "quality_run_id",
+                "predecessor_event_id",
+                "plan_id",
+                "plan_fingerprint",
+                "review_fingerprint",
+                "evaluation_id",
+                "evaluation_fingerprint",
+            )
+        )
     )
 
     def __init__(
@@ -60,6 +70,11 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
         predecessor_event_id: str,
         approver_ids: Collection[str],
         audit_dsn: str | None,
+        plan_id: str = "",
+        plan_fingerprint: str = "",
+        review_fingerprint: str = "",
+        evaluation_id: str = "",
+        evaluation_fingerprint: str = "",
         **kwargs: Any,
     ) -> None:
         self.quality_run_id = quality_run_id
@@ -67,6 +82,11 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
         # Keep custom-operator state DAG-serialization friendly; a set is not JSON data.
         self.approver_ids = sorted(set(approver_ids))
         self.audit_dsn = audit_dsn
+        self.plan_id = plan_id
+        self.plan_fingerprint = plan_fingerprint
+        self.review_fingerprint = review_fingerprint
+        self.evaluation_id = evaluation_id
+        self.evaluation_fingerprint = evaluation_fingerprint
         super().__init__(**kwargs)
 
     def execute_complete(self, context: dict[str, Any], event: dict[str, Any]) -> Any:
@@ -87,5 +107,10 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
             complete_provider=lambda: super(AuditedApprovalOperator, self).execute_complete(
                 context=context, event=event
             ),
+            plan_id=self.plan_id,
+            plan_fingerprint=self.plan_fingerprint,
+            review_fingerprint=self.review_fingerprint,
+            evaluation_id=self.evaluation_id,
+            evaluation_fingerprint=self.evaluation_fingerprint,
         )
         return decision.model_dump(mode="json")
