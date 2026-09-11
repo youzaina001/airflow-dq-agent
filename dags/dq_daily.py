@@ -20,6 +20,7 @@ from airflow_dq_agent.contracts import (
     QualitySuiteReport,
     RemediationPlan,
 )
+from airflow_dq_agent.demo import register_demo
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
@@ -31,6 +32,7 @@ from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candi
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
 
+register_demo()
 settings = get_settings()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
     raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")

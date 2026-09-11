@@ -1,8 +1,8 @@
 import json
 
 from airflow_dq_agent.agent import run_proposal_agent
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
-from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces import trace_agent_run
 
 

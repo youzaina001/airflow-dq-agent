@@ -10,9 +10,9 @@ from airflow_dq_agent.contracts import (
     TargetSet,
 )
 from airflow_dq_agent.contracts.models import CheckStatus
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.integrity import plan_payload_fingerprint, verify_executable_params
-from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.quality.registry import get_check_spec
 
 

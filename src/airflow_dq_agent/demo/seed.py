@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import random
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from airflow_dq_agent.warehouse.db import apply_ddl, make_engine
+
+DDL_PATH = Path(__file__).with_name("ddl.sql")
 
 COUNTRIES = ["US", "GB", "DE", "FR", "ES", "CA", "NL"]
 CATEGORIES = ["devices", "consumables", "apparel", "lab"]
@@ -41,7 +44,7 @@ def _wipe(engine: Engine) -> None:
 def seed_warehouse(dsn: str | None = None, *, apply_schema: bool = True) -> None:
     engine = make_engine(dsn)
     if apply_schema:
-        apply_ddl(engine)
+        apply_ddl(engine, DDL_PATH.read_text(encoding="utf-8"))
     _wipe(engine)
     rng = random.Random(42)
     start = date(2025, 1, 1)

@@ -12,7 +12,13 @@ from airflow_dq_agent.catalog import (
     list_tables,
 )
 from airflow_dq_agent.contracts.models import Dimension
-from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckPolicy, CheckSpec, get_check_spec
+from airflow_dq_agent.quality.registry import (
+    CHECK_SPECS,
+    CheckPolicy,
+    CheckSpec,
+    get_check_spec,
+    register_check,
+)
 
 
 def test_catalog_reads_are_contract_backed() -> None:
@@ -187,19 +193,23 @@ def test_every_shipped_check_policy_derives_bindable_params() -> None:
             get_governed_action(policy.action_id).derive_params(spec)
 
 
-def test_check_spec_refuses_dedupe_policy_on_a_disallowed_table() -> None:
+def test_register_check_refuses_dedupe_policy_on_a_disallowed_table() -> None:
+    spec = CheckSpec(
+        check_id="dim_product.sku.uniqueness.illegal",
+        table="dim_product",
+        column="sku",
+        dimension=Dimension.UNIQUENESS,
+        description="sku is unique",
+        business_key=["sku"],
+        policies=[
+            CheckPolicy(
+                action_id="dedupe_keep_min_pk",
+                parameters={"business_key": ["sku"]},
+            )
+        ],
+    )
+
     with pytest.raises(ValueError, match="not allowed on dim_product"):
-        CheckSpec(
-            check_id="dim_product.sku.uniqueness.illegal",
-            table="dim_product",
-            column="sku",
-            dimension=Dimension.UNIQUENESS,
-            description="sku is unique",
-            business_key=["sku"],
-            policies=[
-                CheckPolicy(
-                    action_id="dedupe_keep_min_pk",
-                    parameters={"business_key": ["sku"]},
-                )
-            ],
-        )
+        register_check(spec)
+
+    assert spec.check_id not in CHECK_SPECS

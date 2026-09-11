@@ -5,8 +5,8 @@ import yaml
 
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.cli import _drop_table_proposal, _spurious_green_proposal
+from airflow_dq_agent.demo import green_report, seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
-from airflow_dq_agent.quality.fixtures import green_report, seeded_failure_report
 
 CASES = sorted((Path(__file__).parents[2] / "evals/cases").glob("*.yaml"))
 

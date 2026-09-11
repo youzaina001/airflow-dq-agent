@@ -22,7 +22,6 @@ from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckSpec
 from airflow_dq_agent.warehouse.db import make_engine
 
 SAMPLE = 20
-TABLES = tuple(TABLE_CONTRACTS)
 
 
 def _result(
@@ -81,7 +80,7 @@ def _is_undefined_table(exc: BaseException) -> bool:
 
 def load_frames(engine: Engine) -> dict[str, pl.DataFrame]:
     frames: dict[str, pl.DataFrame] = {}
-    for table in TABLES:
+    for table in TABLE_CONTRACTS:
         with engine.connect() as conn:
             try:
                 frames[table] = pl.read_database(

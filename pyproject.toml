@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "airflow-dq-agent"
-version = "0.1.0"
-description = "Eval-driven data-quality agent on Apache Airflow 3: detect, explain, propose, evaluate, optionally apply."
+version = "0.2.0"
+description = "Governed data-quality remediation for Apache Airflow 3: registerable contracts and checks, deterministic compile/eval/apply."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -63,7 +63,14 @@ Homepage = "https://github.com/youzaina001/airflow-dq-agent"
 packages = ["src/airflow_dq_agent"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/airflow_dq_agent", "evals", "README.md", "LICENSE"]
+include = [
+  "src/airflow_dq_agent",
+  "evals",
+  "examples",
+  "README.md",
+  "LICENSE",
+  "CHANGELOG.md",
+]
 
 [tool.ruff]
 target-version = "py312"

@@ -1,0 +1,23 @@
+# Adopter registry example. Load with:
+#   from airflow_dq_agent import load_registry
+#   load_registry("examples/my_warehouse.yaml")
+tables:
+  - table: ext_invoice
+    grain: one row per invoice_id
+    description: Adopter-owned invoice header.
+    primary_key: [invoice_id]
+    columns:
+      - name: invoice_id
+        dtype: int64
+        unique: true
+      - name: amount
+        dtype: float64
+        nullable: true
+checks:
+  - check_id: ext_invoice.amount.completeness
+    table: ext_invoice
+    column: amount
+    dimension: completeness
+    description: amount must be present
+    policies:
+      - action_id: quarantine_nulls

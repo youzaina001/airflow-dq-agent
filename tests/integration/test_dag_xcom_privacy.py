@@ -26,9 +26,9 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.quality import run_quality_suite, sample_free_report, seeded_failure_report
-from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
-from airflow_dq_agent.warehouse.seed import seed_warehouse
+from airflow_dq_agent.demo import seed_warehouse, seeded_failure_report
+from airflow_dq_agent.demo.defects import EXPECTED_DEFECTS
+from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 
 DAG_PATH = Path(__file__).resolve().parents[2] / "dags" / "dq_daily.py"
 
