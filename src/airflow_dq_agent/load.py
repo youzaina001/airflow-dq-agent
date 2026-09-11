@@ -8,8 +8,14 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from airflow_dq_agent.contracts.tables import TableContract, register_contract
-from airflow_dq_agent.quality.registry import CheckSpec, register_check
+from airflow_dq_agent.action_definitions import get_governed_action
+from airflow_dq_agent.contracts.tables import (
+    TABLE_CONTRACTS,
+    TableContract,
+    get_table_contract,
+    register_contract,
+)
+from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckSpec, register_check
 
 
 class _RegistryDocument(BaseModel):
@@ -44,16 +50,45 @@ def load_registry(path: str | Path) -> None:
         document = _RegistryDocument.model_validate(raw)
     except ValidationError as exc:
         raise _named(source, exc) from exc
-    for contract in document.tables:
-        register_contract(contract)
-    for index, raw_check in enumerate(document.checks):
-        try:
-            spec = CheckSpec.model_validate(raw_check)
-        except ValidationError as exc:
-            raise _named(source, exc, prefix=f"checks.{index}") from exc
-        except (KeyError, ValueError) as exc:
-            raise ValueError(f"{source}: checks.{index}: {exc}") from exc
-        try:
-            register_check(spec)
-        except (KeyError, ValueError) as exc:
-            raise ValueError(f"{source}: checks.{index}: {exc}") from exc
+    contracts = dict(TABLE_CONTRACTS)
+    checks = dict(CHECK_SPECS)
+    try:
+        for index, contract in enumerate(document.tables):
+            try:
+                register_contract(contract)
+            except ValueError as exc:
+                raise ValueError(f"{source}: tables.{index}.table: {exc}") from exc
+        for index, raw_check in enumerate(document.checks):
+            table = raw_check.get("table")
+            if isinstance(table, str):
+                try:
+                    get_table_contract(table)
+                except KeyError as exc:
+                    raise ValueError(f"{source}: checks.{index}.table: {exc}") from exc
+            try:
+                spec = CheckSpec.model_validate(raw_check)
+            except ValidationError as exc:
+                raise _named(source, exc, prefix=f"checks.{index}") from exc
+            except (KeyError, ValueError) as exc:
+                raise ValueError(f"{source}: checks.{index}: {exc}") from exc
+            if spec.check_id in CHECK_SPECS:
+                raise ValueError(
+                    f"{source}: checks.{index}.check_id: check_id {spec.check_id!r} is already registered"
+                )
+            for policy_index, policy in enumerate(spec.policies):
+                try:
+                    get_governed_action(policy.action_id)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"{source}: checks.{index}.policies.{policy_index}.action_id: {exc}"
+                    ) from exc
+            try:
+                register_check(spec)
+            except (KeyError, ValueError) as exc:
+                raise ValueError(f"{source}: checks.{index}: {exc}") from exc
+    except Exception:
+        TABLE_CONTRACTS.clear()
+        TABLE_CONTRACTS.update(contracts)
+        CHECK_SPECS.clear()
+        CHECK_SPECS.update(checks)
+        raise

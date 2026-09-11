@@ -6,6 +6,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+import yaml
 
 from airflow_dq_agent import load_registry
 from airflow_dq_agent.contracts import CandidateAction, Proposal, QualityEvidence, TargetSet
@@ -112,6 +113,72 @@ checks:
 
     with pytest.raises(ValueError, match=r"bad-check\.yaml: checks\.0\.check_id:"):
         load_registry(path)
+
+
+@pytest.mark.parametrize(("section", "field"), [("tables", "table"), ("checks", "check_id")])
+def test_load_registry_names_duplicate_registration_field(
+    tmp_path: Path, section: str, field: str
+) -> None:
+    path = tmp_path / "duplicate.yaml"
+    document = yaml.safe_load(_INVOICE_YAML)
+    document[section].append(document[section][0])
+    path.write_text(yaml.safe_dump(document))
+
+    with pytest.raises(ValueError, match=rf"duplicate\.yaml: {section}\.1\.{field}:"):
+        load_registry(path)
+
+
+def test_load_registry_names_unknown_action_field(tmp_path: Path) -> None:
+    path = tmp_path / "unknown-action.yaml"
+    document = yaml.safe_load(_INVOICE_YAML)
+    document["checks"][0]["policies"].append({"action_id": "unknown_action"})
+    path.write_text(yaml.safe_dump(document))
+
+    with pytest.raises(
+        ValueError, match=r"unknown-action\.yaml: checks\.0\.policies\.1\.action_id:"
+    ):
+        load_registry(path)
+
+
+def test_load_registry_names_unknown_table_field(tmp_path: Path) -> None:
+    path = tmp_path / "unknown-table.yaml"
+    document = yaml.safe_load(_INVOICE_YAML)
+    document["checks"][0]["table"] = "missing_table"
+    path.write_text(yaml.safe_dump(document))
+
+    with pytest.raises(ValueError, match=r"unknown-table\.yaml: checks\.0\.table:"):
+        load_registry(path)
+
+
+@pytest.mark.parametrize("failure", ["duplicate_table", "missing_check_id", "unknown_action"])
+def test_failed_load_preserves_registries_and_allows_corrected_retry(
+    tmp_path: Path, failure: str
+) -> None:
+    path = tmp_path / "retry.yaml"
+    contracts = dict(TABLE_CONTRACTS)
+    checks = dict(CHECK_SPECS)
+    document = yaml.safe_load(_INVOICE_YAML)
+    if failure == "duplicate_table":
+        document["tables"].append(document["tables"][0])
+    else:
+        broken_check = dict(document["checks"][0])
+        if failure == "missing_check_id":
+            del broken_check["check_id"]
+        else:
+            broken_check["check_id"] = "ext_invoice.amount.invalid_action"
+            broken_check["policies"] = [{"action_id": "unknown_action"}]
+        document["checks"].append(broken_check)
+    path.write_text(yaml.safe_dump(document))
+
+    with pytest.raises(ValueError):
+        load_registry(path)
+
+    assert contracts == TABLE_CONTRACTS
+    assert checks == CHECK_SPECS
+    path.write_text(_INVOICE_YAML)
+    load_registry(path)
+    assert get_table_contract("ext_invoice").primary_key == ["invoice_id"]
+    assert get_check_spec("ext_invoice.amount.completeness").table == "ext_invoice"
 
 
 class _TargetSets:
