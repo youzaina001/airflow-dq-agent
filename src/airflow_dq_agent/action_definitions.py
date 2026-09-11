@@ -22,7 +22,7 @@ from airflow_dq_agent.contracts.remediations import (
     RemediationAction,
     validate_common_params,
 )
-from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS, TableContract, get_table_contract
+from airflow_dq_agent.contracts.tables import TableContract, get_table_contract
 from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 
 
@@ -356,7 +356,7 @@ def _register_governed_action(
     destructive_rank: DestructiveRank,
     reversible: bool,
     required_params: list[str],
-    allowed_tables: frozenset[str],
+    allowed_tables: frozenset[str] | None,
     preview_sql: str,
     derive: DerivedParams,
     render: RenderAction,
@@ -393,7 +393,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             destructive_rank=DestructiveRank.NONE,
             reversible=True,
             required_params=["check_id"],
-            allowed_tables=frozenset(TABLE_CONTRACTS),
+            allowed_tables=None,
             preview_sql="-- no-op: alert only for {check_id} on {table}",
             derive=_derive_no_op,
             render=_render_no_op,
@@ -405,7 +405,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             destructive_rank=DestructiveRank.MEDIUM,
             reversible=True,
             required_params=["column", "pk_column"],
-            allowed_tables=frozenset(TABLE_CONTRACTS),
+            allowed_tables=None,
             preview_sql=(
                 "INSERT INTO dq.quarantine_rows (run_id, table_name, pk_json, reason, payload)\n"
                 "SELECT :run_id, :table, jsonb_build_object(:pk_column, t.{pk_column}), :reason, to_jsonb(t)\n"
@@ -423,7 +423,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             destructive_rank=DestructiveRank.MEDIUM,
             reversible=True,
             required_params=["check_id", "column", "pk_column"],
-            allowed_tables=frozenset(TABLE_CONTRACTS),
+            allowed_tables=None,
             preview_sql=(
                 "INSERT INTO dq.quarantine_rows (...) SELECT ... FROM warehouse.{table} "
                 "WHERE <controlled validity predicate for {check_id}>"
@@ -501,7 +501,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             destructive_rank=DestructiveRank.NONE,
             reversible=True,
             required_params=["check_id"],
-            allowed_tables=frozenset(TABLE_CONTRACTS),
+            allowed_tables=None,
             preview_sql="-- schema drift is a contract change, not a DML step",
             derive=_derive_no_op,
             render=_render_no_op,

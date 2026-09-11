@@ -11,8 +11,8 @@ from airflow_dq_agent.contracts.models import (
     Proposal,
     QualityEvidence,
 )
+from airflow_dq_agent.demo import green_report, seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
-from airflow_dq_agent.quality.fixtures import green_report, seeded_failure_report
 
 
 def test_stub_proposal_is_allow_list_grounded(monkeypatch: pytest.MonkeyPatch) -> None:

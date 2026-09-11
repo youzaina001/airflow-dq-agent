@@ -25,11 +25,11 @@ from airflow_dq_agent.contracts.models import (
     TargetSet,
 )
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
-from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces import InMemoryAuditRepository
 from airflow_dq_agent.traces.lineage import apply_result_event, decision_event, review_event
 

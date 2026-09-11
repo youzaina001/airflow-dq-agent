@@ -1,0 +1,378 @@
+tables:
+- table: dim_customer
+  grain: one row per customer_sk
+  description: Synthetic shoppers. Emails are @example.test — no real PII.
+  columns:
+  - name: customer_sk
+    dtype: int64
+    unique: true
+  - name: customer_nk
+    dtype: utf8
+    unique: true
+    description: Business key
+  - name: email
+    dtype: utf8
+    description: Must contain @
+  - name: country
+    dtype: utf8
+  - name: signup_date
+    dtype: date
+  - name: is_active
+    dtype: bool
+  primary_key:
+  - customer_sk
+- table: dim_product
+  grain: one row per product_sk
+  description: Catalog of synthetic SKUs.
+  columns:
+  - name: product_sk
+    dtype: int64
+    unique: true
+  - name: sku
+    dtype: utf8
+    unique: true
+  - name: category
+    dtype: utf8
+    allowed_values:
+    - devices
+    - consumables
+    - apparel
+    - lab
+  - name: unit_price
+    dtype: float64
+  - name: active_flag
+    dtype: bool
+  primary_key:
+  - product_sk
+- table: fact_orders
+  grain: one row per order_id
+  description: Order headers. total_amount is completeness-critical.
+  columns:
+  - name: order_id
+    dtype: int64
+    unique: true
+  - name: customer_sk
+    dtype: int64
+  - name: order_ts
+    dtype: datetime
+  - name: status
+    dtype: utf8
+    allowed_values:
+    - placed
+    - paid
+    - shipped
+    - cancelled
+    - returned
+  - name: total_amount
+    dtype: float64
+    description: Must be non-null and >= 0
+  - name: currency
+    dtype: utf8
+    allowed_values:
+    - USD
+    - EUR
+    - GBP
+  primary_key:
+  - order_id
+  foreign_keys:
+  - - customer_sk
+    - dim_customer
+    - customer_sk
+- table: fact_order_items
+  grain: one row per order_item_id
+  description: Order lines. product_sk must resolve.
+  columns:
+  - name: order_item_id
+    dtype: int64
+    unique: true
+  - name: order_id
+    dtype: int64
+  - name: product_sk
+    dtype: int64
+  - name: qty
+    dtype: int64
+  - name: unit_price
+    dtype: float64
+  primary_key:
+  - order_item_id
+  foreign_keys:
+  - - order_id
+    - fact_orders
+    - order_id
+  - - product_sk
+    - dim_product
+    - product_sk
+- table: dim_site
+  grain: one row per site_sk
+  description: Synthetic trial sites. No real investigators.
+  columns:
+  - name: site_sk
+    dtype: int64
+    unique: true
+  - name: site_id
+    dtype: utf8
+    unique: true
+  - name: country
+    dtype: utf8
+  - name: region
+    dtype: utf8
+  primary_key:
+  - site_sk
+- table: dim_patient
+  grain: one row per patient_sk
+  description: 'Synthetic subjects: IDs + birth year only. No names.'
+  columns:
+  - name: patient_sk
+    dtype: int64
+    unique: true
+  - name: subject_id
+    dtype: utf8
+    unique: true
+  - name: site_sk
+    dtype: int64
+  - name: sex
+    dtype: utf8
+    allowed_values:
+    - M
+    - F
+    - U
+  - name: birth_year
+    dtype: int64
+  - name: enrolled_on
+    dtype: date
+  primary_key:
+  - patient_sk
+  foreign_keys:
+  - - site_sk
+    - dim_site
+    - site_sk
+- table: fact_visits
+  grain: one row per visit_id
+  description: Scheduled visits. visit_date must fall inside the window.
+  columns:
+  - name: visit_id
+    dtype: int64
+    unique: true
+  - name: patient_sk
+    dtype: int64
+  - name: visit_code
+    dtype: utf8
+  - name: window_start
+    dtype: date
+  - name: window_end
+    dtype: date
+  - name: visit_date
+    dtype: date
+    nullable: true
+  - name: status
+    dtype: utf8
+    allowed_values:
+    - scheduled
+    - completed
+    - missed
+    - window_violation
+  primary_key:
+  - visit_id
+  foreign_keys:
+  - - patient_sk
+    - dim_patient
+    - patient_sk
+- table: fact_adverse_events
+  grain: one row per ae_id
+  description: Synthetic AE log. term_code and severity are validity-critical.
+  columns:
+  - name: ae_id
+    dtype: int64
+    unique: true
+  - name: patient_sk
+    dtype: int64
+  - name: term_code
+    dtype: utf8
+    description: AE-* code from the study dictionary
+  - name: severity
+    dtype: utf8
+    allowed_values:
+    - mild
+    - moderate
+    - severe
+  - name: onset_date
+    dtype: date
+  - name: related_flag
+    dtype: bool
+  primary_key:
+  - ae_id
+  foreign_keys:
+  - - patient_sk
+    - dim_patient
+    - patient_sk
+checks:
+- check_id: fact_orders.total_amount.completeness
+  table: fact_orders
+  column: total_amount
+  dimension: completeness
+  description: total_amount must be present
+  policies:
+  - action_id: quarantine_nulls
+- check_id: fact_orders.status.validity
+  table: fact_orders
+  column: status
+  dimension: validity
+  description: status in placed|paid|shipped|cancelled|returned
+  policies:
+  - action_id: quarantine_invalids
+- check_id: fact_orders.order_nk.uniqueness
+  table: fact_orders
+  column: order_ts
+  dimension: uniqueness
+  description: grain (customer_sk, order_ts) must be unique
+  policies:
+  - action_id: dedupe_keep_min_pk
+    parameters:
+      business_key:
+      - customer_sk
+      - order_ts
+  business_key:
+  - customer_sk
+  - order_ts
+- check_id: fact_order_items.product_sk.referential_integrity
+  table: fact_order_items
+  column: product_sk
+  dimension: referential_integrity
+  description: product_sk must exist in dim_product
+  policies:
+  - action_id: quarantine_orphans
+- check_id: dim_customer.email.validity
+  table: dim_customer
+  column: email
+  dimension: validity
+  description: email must contain @
+  policies:
+  - action_id: quarantine_invalids
+  contains: '@'
+- check_id: dim_patient.sex.completeness
+  table: dim_patient
+  column: sex
+  dimension: completeness
+  description: sex must be present
+  policies:
+  - action_id: quarantine_nulls
+- check_id: dim_patient.subject_id.uniqueness
+  table: dim_patient
+  column: subject_id
+  dimension: uniqueness
+  description: subject_id is the business key
+  policies:
+  - action_id: dedupe_keep_min_pk
+    parameters:
+      business_key:
+      - subject_id
+  business_key:
+  - subject_id
+- check_id: fact_visits.visit_date.validity
+  table: fact_visits
+  column: visit_date
+  dimension: validity
+  description: visit_date must fall inside the scheduled window
+  policies:
+  - action_id: quarantine_invalids
+  window_start_column: window_start
+  window_end_column: window_end
+- check_id: fact_visits.patient_sk.referential_integrity
+  table: fact_visits
+  column: patient_sk
+  dimension: referential_integrity
+  description: patient_sk must exist in dim_patient
+  policies:
+  - action_id: quarantine_orphans
+- check_id: fact_adverse_events.term_code.completeness
+  table: fact_adverse_events
+  column: term_code
+  dimension: completeness
+  description: term_code must be present
+  policies:
+  - action_id: quarantine_nulls
+- check_id: fact_adverse_events.severity.validity
+  table: fact_adverse_events
+  column: severity
+  dimension: validity
+  description: severity in mild|moderate|severe
+  policies:
+  - action_id: quarantine_invalids
+- check_id: fact_orders.customer_sk.referential_integrity
+  table: fact_orders
+  column: customer_sk
+  dimension: referential_integrity
+  description: customer_sk must exist in dim_customer
+  policies:
+  - action_id: quarantine_orphans
+- check_id: dim_product.sku.uniqueness
+  table: dim_product
+  column: sku
+  dimension: uniqueness
+  description: sku is unique
+  policies:
+  - action_id: no_op_alert
+  business_key:
+  - sku
+- check_id: dim_patient.site_sk.referential_integrity
+  table: dim_patient
+  column: site_sk
+  dimension: referential_integrity
+  description: site_sk must exist in dim_site
+  policies:
+  - action_id: quarantine_orphans
+- check_id: fact_adverse_events.patient_sk.referential_integrity
+  table: fact_adverse_events
+  column: patient_sk
+  dimension: referential_integrity
+  description: patient_sk must exist in dim_patient
+  policies:
+  - action_id: quarantine_orphans
+- check_id: dim_customer.schema_drift
+  table: dim_customer
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket
+- check_id: dim_product.schema_drift
+  table: dim_product
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket
+- check_id: fact_orders.schema_drift
+  table: fact_orders
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket
+- check_id: fact_order_items.schema_drift
+  table: fact_order_items
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket
+- check_id: dim_site.schema_drift
+  table: dim_site
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket
+- check_id: dim_patient.schema_drift
+  table: dim_patient
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket
+- check_id: fact_visits.schema_drift
+  table: fact_visits
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket
+- check_id: fact_adverse_events.schema_drift
+  table: fact_adverse_events
+  dimension: schema_drift
+  description: observed columns must match TABLE_CONTRACTS
+  policies:
+  - action_id: schema_drift_ticket

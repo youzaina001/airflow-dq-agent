@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from airflow_dq_agent.contracts.models import CheckResult, CheckStatus, QualitySuiteReport
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
+from airflow_dq_agent.demo.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.quality.registry import CHECK_SPECS
-from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
 
 
 def _fail(check_id: str, samples: list[dict[str, object]], n_total: int) -> CheckResult:
@@ -43,7 +43,7 @@ def _pass(check_id: str, n_total: int) -> CheckResult:
 
 
 def seeded_failure_report() -> QualitySuiteReport:
-    """Mirrors warehouse/seed.py so evals do not need Postgres."""
+    """Mirrors demo/seed.py so evals do not need Postgres."""
     checks = [
         _fail(
             "fact_orders.total_amount.completeness",

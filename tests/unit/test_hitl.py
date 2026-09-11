@@ -16,6 +16,7 @@ from airflow_dq_agent.contracts import (
     RemediationPlan,
     TargetSet,
 )
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.hitl import (
     audit_approval_decision,
@@ -24,7 +25,6 @@ from airflow_dq_agent.hitl import (
 )
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.review import build_approval_review, render_approval_review_body
-from airflow_dq_agent.quality.fixtures import seeded_failure_report
 from airflow_dq_agent.traces import quality_report_event
 
 

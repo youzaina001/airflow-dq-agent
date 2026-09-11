@@ -21,7 +21,7 @@ help:
 	@echo "make demo      - suite → stub propose → eval → print the story"
 	@echo "make format    - auto-format and fix lint issues"
 	@echo "make check     - lint, typecheck, and unit tests"
-	@echo "make catalog   - run the FastMCP catalog server"
+	@echo "make catalog   - run the bundled demo FastMCP catalog server"
 	@echo "make compose-smoke - deterministic stub/shadow Compose DAG smoke test"
 	@echo "make lint fmt typecheck ci"
 
@@ -55,7 +55,7 @@ demo:
 	LLM_MODE=stub APPLY_MODE=off $(PYTHON) -m airflow_dq_agent.cli demo --no-db
 
 catalog:
-	$(PYTHON) -m airflow_dq_agent.catalog.mcp_server
+	$(PYTHON) -m airflow_dq_agent.demo.catalog
 
 compose-smoke:
 	bash scripts/compose-smoke.sh

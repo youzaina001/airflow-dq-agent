@@ -8,6 +8,8 @@ from sqlalchemy import text
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.apply import apply_plan
 from airflow_dq_agent.contracts.models import CheckStatus, ExecutablePlanItem, HumanDecision
+from airflow_dq_agent.demo import seed_warehouse
+from airflow_dq_agent.demo.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
@@ -22,8 +24,6 @@ from airflow_dq_agent.traces import (
 )
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
-from airflow_dq_agent.warehouse.defects import EXPECTED_DEFECTS
-from airflow_dq_agent.warehouse.seed import seed_warehouse
 
 
 @pytest.mark.integration

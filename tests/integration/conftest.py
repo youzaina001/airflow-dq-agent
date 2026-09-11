@@ -18,7 +18,8 @@ def isolated_trace_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 def warehouse_dsn() -> str:
     configured = os.getenv("TEST_WAREHOUSE_DSN")
     if configured:
-        return configured
+        yield configured
+        return
     try:
         from testcontainers.postgres import PostgresContainer
 

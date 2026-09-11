@@ -80,6 +80,67 @@ same governed lifecycle.
 See [`.env.example`](.env.example) for the complete local configuration. Production
 deployments should supply separate least-privilege read, audit, and apply DSNs.
 
+## Use against your warehouse
+
+Install the package (PyPI publishing is not part of this release):
+
+```bash
+pip install "airflow-dq-agent @ git+https://github.com/youzaina001/airflow-dq-agent.git"
+# or from a checkout:
+pip install -e ".[dev]"
+```
+
+Safe defaults remain `LLM_MODE=stub` and `APPLY_MODE=off`. Register your tables and
+checks in process — the governance core starts with empty catalogs:
+
+```python
+from airflow_dq_agent import (
+    CheckPolicy,
+    CheckSpec,
+    ColumnContract,
+    TableContract,
+    load_registry,
+    register_check,
+    register_contract,
+)
+from airflow_dq_agent.contracts.models import Dimension
+from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
+from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.quality import run_quality_suite
+
+register_contract(
+    TableContract(
+        table="ext_invoice",
+        grain="one row per invoice_id",
+        description="Invoice header",
+        primary_key=["invoice_id"],
+        columns=[
+            ColumnContract(name="invoice_id", dtype="int64", unique=True),
+            ColumnContract(name="amount", dtype="float64", nullable=True),
+        ],
+    )
+)
+register_check(
+    CheckSpec(
+        check_id="ext_invoice.amount.completeness",
+        table="ext_invoice",
+        column="amount",
+        dimension=Dimension.COMPLETENESS,
+        description="amount must be present",
+        policies=[CheckPolicy(action_id="quarantine_nulls")],
+    )
+)
+# equivalent: load_registry("examples/my_warehouse.yaml")
+
+report = run_quality_suite(dsn)  # your read DSN
+# propose (stub/replay/live) → evaluate_proposal → compile_remediation_plan
+# → evaluate_plan → HITL / apply. The model still never supplies SQL.
+```
+
+Point `dq_daily` at the same registration before the suite task runs (the bundled
+DAG calls `register_demo()` for the synthetic warehouse). Keep `APPLY_MODE=off`
+until a passing plan should request approval.
+
 ## Quick start
 
 The database-free path requires Python 3.12 or later and Make:
@@ -160,16 +221,19 @@ or seeded row values while proposal, compilation, and evaluation still pass.
 src/airflow_dq_agent/
   contracts/             # table, check-result, proposal, and remediation contracts
   quality/               # deterministic Polars/Pandera quality suite
-  catalog/               # transport-free catalog plus FastMCP adapter
+  catalog/               # transport-free catalog plus empty FastMCP adapter
   agent/                 # stub, replay, and opt-in read-only live proposal paths
   evals/                 # deterministic proposal scorers and gates
   action_definitions.py  # governed action ownership and registration
   planning/              # plan compiler, target-set resolver, and apply admission
   apply/                 # transactional executor
   traces/                # append-only JSONL and optional Postgres mirror
-  warehouse/             # synthetic DDL, seed data, and known defects
+  warehouse/             # DSN/engine helpers (no demo schema)
+  demo/                  # optional synthetic warehouse, seed, fixtures, and catalog MCP
+  load.py                # YAML registry loader
 dags/dq_daily.py         # Airflow TaskFlow orchestration and HITL boundary
 evals/cases/             # portable deterministic evaluation cases
+examples/                # adopter YAML example
 ```
 
 The scope is detection, typed proposals, deterministic evaluation, audited approval,

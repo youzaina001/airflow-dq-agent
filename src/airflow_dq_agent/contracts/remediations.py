@@ -18,7 +18,7 @@ class RemediationAction(BaseModel):
     reversible: bool
     required_params: list[str]
     optional_params: list[str] = Field(default_factory=list)
-    allowed_tables: frozenset[str]
+    allowed_tables: frozenset[str] | None = None
     preview_sql: str
     notes: str = ""
 
@@ -29,7 +29,7 @@ def validate_common_params(
     """Validate metadata shared by every governed remediation action."""
     errors: list[str] = []
     table_key = table.split(".")[-1]
-    if table_key not in action.allowed_tables:
+    if action.allowed_tables is not None and table_key not in action.allowed_tables:
         errors.append(f"{action.action_id} is not allowed on {table_key}")
         return errors
     try:
