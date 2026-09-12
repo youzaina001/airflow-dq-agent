@@ -7,7 +7,9 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from airflow_dq_agent import check_policy
 from airflow_dq_agent.action_definitions import is_governed_action
+from airflow_dq_agent.check_policy import PolicyRefusal
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.models import (
     EvalReport,
@@ -21,7 +23,6 @@ from airflow_dq_agent.planning.integrity import (
     evaluation_payload_fingerprint,
     verify_plan_integrity,
 )
-from airflow_dq_agent.quality.registry import get_check_spec
 
 _DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
 
@@ -138,22 +139,21 @@ def _allowlist_score(proposal: Proposal) -> EvalScore:
 
 
 def _check_policy_score(report: QualitySuiteReport, proposal: Proposal) -> EvalScore:
+    failures = {check.check_id: check for check in report.failed_checks}
     illegal: list[str] = []
     covered: set[str] = set()
-    failures = {check.check_id for check in report.failed_checks}
     for action in proposal.candidate_actions:
-        for evidence in action.evidence:
-            try:
-                spec = get_check_spec(evidence.check_id)
-            except KeyError:
-                illegal.append(action.action_id)
-                continue
-            if spec.rule_for(action.action_id) is None:
-                illegal.append(action.action_id)
-                continue
-            if evidence.check_id in failures:
-                covered.add(evidence.check_id)
-    omitted = sorted(failures - covered)
+        try:
+            check_policy.justify_action(
+                action_id=action.action_id,
+                evidence=action.evidence,
+                report_failures=failures,
+            )
+        except PolicyRefusal:
+            illegal.append(action.action_id)
+            continue
+        covered.update(evidence.check_id for evidence in action.evidence)
+    omitted = sorted(set(failures) - covered)
     illegal_ids = sorted(set(illegal))
     passed = not illegal_ids and not omitted
     if passed:
