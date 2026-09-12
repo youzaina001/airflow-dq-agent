@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Protocol
 from uuid import uuid4
 
+from airflow_dq_agent import check_policy
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
@@ -68,23 +69,6 @@ def current_policy_fingerprint(plan: RemediationPlan) -> str:
     return canonical_fingerprint(item_fingerprints)
 
 
-def _validated_evidence(
-    report_run_id: str, action: CandidateAction, report_failures: dict[str, str]
-) -> tuple[list[QualityEvidence], list[CheckSpec]]:
-    evidence = action.evidence
-    if not evidence:
-        raise ValueError("candidate action has no quality evidence")
-    specs: list[CheckSpec] = []
-    for item in evidence:
-        contract_id = report_failures.get(item.check_id)
-        if contract_id is None or contract_id != item.contract_id:
-            raise ValueError("candidate evidence does not refer to a failed check in this report")
-        specs.append(get_check_spec(item.check_id))
-    if len({spec.table for spec in specs}) != 1:
-        raise ValueError("one plan item cannot target more than one contracted table")
-    return evidence, specs
-
-
 def _blocked_item(
     *,
     index: int,
@@ -119,7 +103,7 @@ def compile_remediation_plan(
 
     if not isinstance(report, QualitySuiteReport):
         report = QualitySuiteReport.model_validate(report)
-    report_failures = {check.check_id: check.contract_id for check in report.failed_checks}
+    report_failures = {check.check_id: check for check in report.failed_checks}
     items: list[ExecutablePlanItem | NonExecutablePlanItem] = []
     covered: set[str] = set()
     duplicate_identities = {
@@ -145,27 +129,26 @@ def compile_remediation_plan(
             )
             continue
         try:
-            evidence, specs = _validated_evidence(report.run_id, requested, report_failures)
-            if any(spec.rule_for(requested.action_id) is None for spec in specs):
-                raise ValueError("requested action is not declared by the check policy")
+            justification = check_policy.justify_action(
+                action_id=requested.action_id,
+                evidence=requested.evidence,
+                report_failures=report_failures,
+            )
+            specs = justification.specs
             if any(spec.table != specs[0].table for spec in specs):
                 raise ValueError("one plan item cannot target more than one contracted table")
-            governed_action = get_governed_action(requested.action_id)
-            params = governed_action.derive_params(specs[0])
-            if any(governed_action.derive_params(spec) != params for spec in specs[1:]):
-                raise ValueError("evidence requires incompatible controlled parameter values")
             target_set = target_sets.resolve(
                 report_run_id=report.run_id,
                 check_id=specs[0].check_id,
                 action_id=requested.action_id,
                 table=specs[0].table,
-                params=params,
+                params=justification.params,
             )
             item = ExecutablePlanItem(
                 item_id=f"candidate-{index}",
                 action_id=requested.action_id,
                 table=specs[0].table,
-                params=params,
+                params=justification.params,
                 evidence=tuple(evidence),
                 target_set=target_set,
                 policy_fingerprint=_policy_fingerprint(specs, requested.action_id),
@@ -185,8 +168,8 @@ def compile_remediation_plan(
             )
 
     omitted = [
-        QualityEvidence(check_id=check_id, contract_id=contract_id)
-        for check_id, contract_id in report_failures.items()
+        QualityEvidence(check_id=check_id, contract_id=failed.contract_id)
+        for check_id, failed in report_failures.items()
         if check_id not in covered
     ]
     if omitted:

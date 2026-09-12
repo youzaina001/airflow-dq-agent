@@ -7,7 +7,7 @@ from datetime import datetime
 
 from sqlalchemy.engine import make_url
 
-from airflow_dq_agent.action_definitions import get_governed_action
+from airflow_dq_agent import check_policy
 from airflow_dq_agent.contracts.fingerprints import (
     canonical_fingerprint,
     report_payload_fingerprint,
@@ -21,7 +21,6 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.quality.registry import get_check_spec
 
 PlanItem = ExecutablePlanItem | NonExecutablePlanItem
 
@@ -247,27 +246,22 @@ def verify_executable_params(
             )
         seen_identities.add(identity)
         try:
-            if not item.evidence:
-                raise ValueError("executable item has no quality evidence")
-            specs = []
-            for evidence in item.evidence:
-                failed = report_failures.get(evidence.check_id)
-                if failed is None or failed.contract_id != evidence.contract_id:
-                    raise ValueError("evidence is not a failed check in this quality run")
-                spec = get_check_spec(evidence.check_id)
+            justification = check_policy.justify_action(
+                action_id=item.action_id,
+                evidence=item.evidence,
+                report_failures=report_failures,
+            )
+            derived = justification.params
+            for evidence, spec in zip(item.evidence, justification.specs, strict=True):
                 if spec.table != item.table or spec.contract_id != evidence.contract_id:
                     raise ValueError("evidence does not match the contracted table")
-                if failed.table != item.table:
+                if report_failures[evidence.check_id].table != item.table:
                     raise ValueError("evidence does not match the contracted table")
-                specs.append(spec)
                 covered.add(evidence.check_id)
-            action = get_governed_action(item.action_id)
-            derived = action.derive_params(specs[0])
-            if any(action.derive_params(spec) != derived for spec in specs[1:]):
-                raise ValueError("evidence requires incompatible controlled parameter values")
         except (KeyError, ValueError) as exc:
             raise PermissionError(
-                f"Refusing {refusing}: quality evidence is not a failed check in this quality run"
+                f"Refusing {refusing}: quality evidence is not a failed check in this "
+                f"quality run ({exc})"
             ) from exc
         if ExecutablePlanItem.freeze_params(derived) != item.params:
             raise PermissionError(f"Refusing {refusing}: item parameters do not match Check Policy")

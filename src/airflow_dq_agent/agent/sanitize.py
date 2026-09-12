@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from airflow_dq_agent.action_definitions import is_governed_action
+from airflow_dq_agent import check_policy
+from airflow_dq_agent.check_policy import PolicyRefusal
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
     Proposal,
     QualityEvidence,
     QualitySuiteReport,
 )
-from airflow_dq_agent.quality.registry import get_check_spec
 
 
 def safe_proposal_for_xcom(report: QualitySuiteReport, proposal: Proposal) -> dict[str, Any]:
@@ -23,33 +23,28 @@ def safe_proposal_for_xcom(report: QualitySuiteReport, proposal: Proposal) -> di
     quality report cross into XCom. Unexpected identifiers fail closed without being
     included in the error message or a task return value.
     """
-    report_checks = {check.check_id: check for check in report.checks}
+    report_failures = {check.check_id: check for check in report.failed_checks}
     safe_actions: list[CandidateAction] = []
     for requested in proposal.candidate_actions:
-        if not is_governed_action(requested.action_id):
-            raise PermissionError("Refusing to persist an unbounded candidate proposal")
-
-        safe_evidence: list[QualityEvidence] = []
-        for evidence in requested.evidence:
-            check = report_checks.get(evidence.check_id)
-            if check is None or evidence.contract_id != check.contract_id:
-                raise PermissionError("Refusing to persist an unbounded candidate proposal")
-            try:
-                spec = get_check_spec(check.check_id)
-            except KeyError as exc:
-                raise PermissionError(
-                    "Refusing to persist an unbounded candidate proposal"
-                ) from exc
-            if spec.rule_for(requested.action_id) is None:
-                raise PermissionError("Refusing to persist an unbounded candidate proposal")
-            safe_evidence.append(
-                QualityEvidence(check_id=check.check_id, contract_id=check.contract_id)
+        try:
+            justification = check_policy.justify_action(
+                action_id=requested.action_id,
+                evidence=requested.evidence,
+                report_failures=report_failures,
             )
+        except PolicyRefusal as exc:
+            raise PermissionError("Refusing to persist an unbounded candidate proposal") from exc
 
         safe_actions.append(
             CandidateAction(
                 action_id=requested.action_id,
-                evidence=safe_evidence,
+                evidence=[
+                    QualityEvidence(
+                        check_id=spec.check_id,
+                        contract_id=report_failures[spec.check_id].contract_id,
+                    )
+                    for spec in justification.specs
+                ],
                 rationale="Requested for the cited Quality Evidence.",
             )
         )
