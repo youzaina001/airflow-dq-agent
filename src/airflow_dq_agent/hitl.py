@@ -65,6 +65,69 @@ def parse_approval_output(output: Mapping[str, Any], *, approver_ids: Set[str]) 
     )
 
 
+_RECORDABLE_KINDS = frozenset({"Approve", "Reject", "Timeout"})
+
+
+def validate_human_decision(decision: HumanDecision, *, approver_ids: Set[str]) -> HumanDecision:
+    """Enforce the attributable-approval matrix with no I/O."""
+    if decision.decision not in _RECORDABLE_KINDS:
+        raise PermissionError("Refusing Human Decision: unknown outcome kind")
+    if decision.decision == "Timeout":
+        if decision.actor != "airflow-timeout":
+            raise PermissionError("Refusing Human Decision: timeout requires no identity")
+        return decision
+    if decision.actor not in approver_ids:
+        raise PermissionError("Refusing Human Decision: actor is not allow-listed")
+    if decision.decision == "Approve" and (not decision.note or not decision.note.strip()):
+        raise PermissionError("Refusing Human Decision: approval requires a non-empty note")
+    return decision
+
+
+def record_human_decision(
+    decision: HumanDecision | Mapping[str, Any],
+    *,
+    approver_ids: Set[str],
+    quality_run_id: str,
+    predecessor: AuditEvent | str,
+    persist: Callable[[AuditEvent], None],
+    plan_id: str | None = None,
+    plan_fingerprint: str | None = None,
+    review_fingerprint: str | None = None,
+    evaluation_id: str | None = None,
+    evaluation_fingerprint: str | None = None,
+) -> HumanDecision:
+    """Validate, fingerprint, persist Audit Lineage, then return the bound Human Decision."""
+    if not isinstance(decision, HumanDecision):
+        decision = parse_approval_output(decision, approver_ids=approver_ids)
+    decision = validate_human_decision(decision, approver_ids=approver_ids)
+    decision = decision.model_copy(
+        update={
+            "fingerprint": decision_payload_fingerprint(
+                decision_id=decision.decision_id,
+                decision=decision.decision,
+                actor=decision.actor,
+                note=decision.note,
+                decided_at=decision.decided_at,
+            )
+        }
+    )
+    if review_fingerprint and review_fingerprint.strip():
+        decision = decision.model_copy(update={"review_fingerprint": review_fingerprint})
+    event = decision_event(
+        quality_run_id,
+        decision,
+        predecessor,
+        plan_id=plan_id,
+        plan_fingerprint=plan_fingerprint,
+        evaluation_id=evaluation_id,
+        evaluation_fingerprint=evaluation_fingerprint,
+    )
+    persist(event)
+    return decision.model_copy(
+        update={"audit_event_id": event.event_id, "fingerprint": event.decision_fingerprint}
+    )
+
+
 def audit_approval_decision(
     output: Mapping[str, Any],
     *,

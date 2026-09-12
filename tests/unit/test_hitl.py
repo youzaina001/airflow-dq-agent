@@ -11,6 +11,7 @@ from airflow_dq_agent.contracts import (
     ApprovalReview,
     CandidateAction,
     EvalReport,
+    HumanDecision,
     Proposal,
     QualityEvidence,
     RemediationPlan,
@@ -22,10 +23,13 @@ from airflow_dq_agent.hitl import (
     audit_approval_decision,
     audit_then_complete_approval,
     parse_approval_output,
+    record_human_decision,
+    validate_human_decision,
 )
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.review import build_approval_review, render_approval_review_body
 from airflow_dq_agent.traces import quality_report_event
+from airflow_dq_agent.traces.lineage import human_decision_fingerprint
 
 
 class _TargetSets:
@@ -299,3 +303,147 @@ def test_dag_uses_sample_free_approval_review_body() -> None:
     assert "review_event" in text
     assert "review_event_id" in text
     assert "PostgresAuditRepository" in text
+
+
+_APPROVER_IDS = {"approver-1"}
+
+
+def test_validator_accepts_approve_with_allowlisted_actor_and_note() -> None:
+    decision = HumanDecision(
+        decision="Approve",
+        actor="approver-1",
+        note="Reviewed exact target counts.",
+    )
+
+    assert validate_human_decision(decision, approver_ids=_APPROVER_IDS) is decision
+
+
+@pytest.mark.parametrize("note", [None, "", "   "])
+def test_validator_refuses_approve_without_note(note: str | None) -> None:
+    decision = HumanDecision(decision="Approve", actor="approver-1", note=note)
+
+    with pytest.raises(PermissionError, match="non-empty note"):
+        validate_human_decision(decision, approver_ids=_APPROVER_IDS)
+
+
+@pytest.mark.parametrize("kind", ["Approve", "Reject"])
+def test_validator_refuses_non_allowlisted_actor(kind: str) -> None:
+    decision = HumanDecision(
+        decision=kind,  # type: ignore[arg-type]
+        actor="stranger",
+        note="Reviewed exact target counts.",
+    )
+
+    with pytest.raises(PermissionError, match="allow-listed"):
+        validate_human_decision(decision, approver_ids=_APPROVER_IDS)
+
+
+def test_validator_accepts_reject_from_allowlisted_actor() -> None:
+    decision = HumanDecision(decision="Reject", actor="approver-1", note=None)
+
+    assert validate_human_decision(decision, approver_ids=_APPROVER_IDS) is decision
+
+
+def test_validator_accepts_timeout_without_identity() -> None:
+    decision = HumanDecision(decision="Timeout", actor="airflow-timeout", note=None)
+
+    assert validate_human_decision(decision, approver_ids=_APPROVER_IDS) is decision
+
+
+def test_recorder_does_not_attribute_timeout_to_a_human_actor() -> None:
+    report = seeded_failure_report()
+    events = []
+
+    with pytest.raises(PermissionError, match="no identity"):
+        record_human_decision(
+            HumanDecision(decision="Timeout", actor="approver-1", note=None),
+            approver_ids=_APPROVER_IDS,
+            quality_run_id=report.run_id,
+            predecessor=quality_report_event(report),
+            persist=events.append,
+        )
+
+    assert events == []
+
+
+def test_validator_refuses_unknown_outcome_kind() -> None:
+    decision = HumanDecision(decision="shadow_skip", actor="approver-1", note="n/a")
+
+    with pytest.raises(PermissionError, match="outcome kind"):
+        validate_human_decision(decision, approver_ids=_APPROVER_IDS)
+
+
+def test_recorder_returns_audit_event_id_matching_persisted_fingerprint() -> None:
+    report = seeded_failure_report()
+    events = []
+    decision = record_human_decision(
+        HumanDecision(
+            decision="Approve",
+            actor="approver-1",
+            note="Reviewed exact target counts.",
+        ),
+        approver_ids=_APPROVER_IDS,
+        quality_run_id=report.run_id,
+        predecessor=quality_report_event(report),
+        persist=events.append,
+    )
+
+    assert len(events) == 1
+    assert decision.audit_event_id
+    assert decision.audit_event_id.strip()
+    assert decision.audit_event_id == events[0].event_id
+    assert decision.fingerprint
+    assert decision.fingerprint == events[0].decision_fingerprint
+    assert decision.fingerprint == human_decision_fingerprint(decision)
+
+
+def test_recorder_persists_once_before_returning() -> None:
+    report = seeded_failure_report()
+    order: list[str] = []
+    events = []
+
+    def persist(event: object) -> None:
+        order.append("persist")
+        events.append(event)
+
+    decision = record_human_decision(
+        HumanDecision(
+            decision="Approve",
+            actor="approver-1",
+            note="Reviewed exact target counts.",
+        ),
+        approver_ids=_APPROVER_IDS,
+        quality_run_id=report.run_id,
+        predecessor=quality_report_event(report),
+        persist=persist,
+    )
+    order.append("return")
+
+    assert order == ["persist", "return"]
+    assert len(events) == 1
+    assert decision.audit_event_id == events[0].event_id
+
+
+def test_recorder_composes_provider_shaped_parser() -> None:
+    report = seeded_failure_report()
+    events = []
+    decision = record_human_decision(
+        {
+            "chosen_options": ["Approve"],
+            "params_input": {"approval_note": "Reviewed exact target counts."},
+            "responded_by_user": {"id": "approver-1"},
+            "timedout": False,
+        },
+        approver_ids=_APPROVER_IDS,
+        quality_run_id=report.run_id,
+        predecessor=quality_report_event(report),
+        persist=events.append,
+    )
+
+    assert decision.decision == "Approve"
+    assert decision.actor == "approver-1"
+    assert decision.note == "Reviewed exact target counts."
+    assert len(events) == 1
+    assert decision.audit_event_id == events[0].event_id
+    assert decision.fingerprint == events[0].decision_fingerprint
+    assert decision.fingerprint == human_decision_fingerprint(decision)
