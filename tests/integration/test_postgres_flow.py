@@ -11,6 +11,7 @@ from airflow_dq_agent.contracts.models import CheckStatus, ExecutablePlanItem, H
 from airflow_dq_agent.demo import seed_warehouse
 from airflow_dq_agent.demo.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
+from airflow_dq_agent.hitl import record_human_decision
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
@@ -18,8 +19,8 @@ from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite
 from airflow_dq_agent.traces import (
     InMemoryAuditRepository,
+    PostgresAuditRepository,
     append_event,
-    append_human_decision,
     candidate_proposal_event,
 )
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
@@ -52,7 +53,7 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
     evaluation = evaluation.model_copy(update={"audit_event_id": evaluation_audit_event.event_id})
     review = build_approval_review(plan, evaluation)
     review_audit_event = review_event(review, evaluation, evaluation_audit_event)
-    append_event(review_audit_event)
+    append_event(review_audit_event, dsn=warehouse_dsn, mirror_postgres=True)
     decision = HumanDecision(
         decision="Approve",
         actor="integration-test",
@@ -68,22 +69,42 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
             audit_repository=InMemoryAuditRepository(),
         )
 
-    decision_audit_event = append_human_decision(
-        report.run_id,
-        review_audit_event,
+    def persist_decision(event):
+        append_event(event, dsn=warehouse_dsn, mirror_postgres=True)
+
+    with pytest.raises(PermissionError, match="Refusing Human Decision: actor is not allow-listed"):
+        record_human_decision(
+            decision,
+            approver_ids={"airflow"},
+            quality_run_id=report.run_id,
+            predecessor=review_audit_event,
+            persist=persist_decision,
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            evaluation_id=evaluation.evaluation_id,
+            evaluation_fingerprint=evaluation.fingerprint,
+        )
+
+    audited_decision = record_human_decision(
         decision,
+        approver_ids={"integration-test"},
+        quality_run_id=report.run_id,
+        predecessor=review_audit_event,
+        persist=persist_decision,
         plan_id=plan.plan_id,
         plan_fingerprint=plan.fingerprint,
         evaluation_id=evaluation.evaluation_id,
         evaluation_fingerprint=evaluation.fingerprint,
     )
-    audited_decision = decision.model_copy(update={"audit_event_id": decision_audit_event.event_id})
+    audit_repository = PostgresAuditRepository(warehouse_dsn)
+    decision_audit_event = audit_repository.get(audited_decision.audit_event_id)
+    assert decision_audit_event is not None
     admission = create_apply_admission(
         plan,
         evaluation,
         audited_decision,
         report=report,
-        audit_repository=InMemoryAuditRepository([review_audit_event, decision_audit_event]),
+        audit_repository=audit_repository,
     )
     assert decision_audit_event.predecessor_ids == [review_audit_event.event_id]
     assert review_audit_event.predecessor_ids == [evaluation_audit_event.event_id]

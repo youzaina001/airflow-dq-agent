@@ -305,6 +305,31 @@ def test_dag_uses_sample_free_approval_review_body() -> None:
     assert "PostgresAuditRepository" in text
 
 
+def test_dag_skips_honest_non_approve_and_refuses_invalid_decisions() -> None:
+    source = Path(__file__).resolve().parents[2] / "dags" / "dq_daily.py"
+    text = source.read_text(encoding="utf-8")
+    admit = text[text.index("def admit_apply_task") : text.index("def apply_after_admission_task")]
+    assert 'if parsed_decision.decision in {"Reject", "Timeout"}:' in admit
+    assert 'raise AirflowSkipException("HITL did not approve this remediation plan")' in admit
+    assert "create_apply_admission(" in admit
+    assert "Reject/Timeout" in admit
+    assert "skip the apply branch" in admit
+    assert "fail loudly" in admit
+
+
+def test_glossary_names_decision_recording_and_fingerprint() -> None:
+    text = (Path(__file__).resolve().parents[2] / "CONTEXT.md").read_text(encoding="utf-8")
+    recording = text[text.index("**Decision Recording**") : text.index("**Decision Fingerprint**")]
+    fingerprint = text[text.index("**Decision Fingerprint**") :]
+    assert "validate" in recording.lower()
+    assert "fingerprint" in recording.lower()
+    assert "persist" in recording.lower()
+    assert "hand-forged" in recording
+    assert "Apply Admission" in recording
+    assert "Human Decision" in fingerprint
+    assert "decision_id" in fingerprint or "decision id" in fingerprint.lower()
+
+
 _APPROVER_IDS = {"approver-1"}
 
 

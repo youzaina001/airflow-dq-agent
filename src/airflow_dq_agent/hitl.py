@@ -142,32 +142,17 @@ def audit_approval_decision(
     evaluation_fingerprint: str | None = None,
 ) -> HumanDecision:
     """Persist a parsed decision before returning it to any downstream admission path."""
-    decision = parse_approval_output(output, approver_ids=approver_ids)
-    decision = decision.model_copy(
-        update={
-            "fingerprint": decision_payload_fingerprint(
-                decision_id=decision.decision_id,
-                decision=decision.decision,
-                actor=decision.actor,
-                note=decision.note,
-                decided_at=decision.decided_at,
-            )
-        }
-    )
-    if review_fingerprint and review_fingerprint.strip():
-        decision = decision.model_copy(update={"review_fingerprint": review_fingerprint})
-    event = decision_event(
-        quality_run_id,
-        decision,
-        predecessor,
+    return record_human_decision(
+        output,
+        approver_ids=approver_ids,
+        quality_run_id=quality_run_id,
+        predecessor=predecessor,
+        persist=persist,
         plan_id=plan_id,
         plan_fingerprint=plan_fingerprint,
+        review_fingerprint=review_fingerprint,
         evaluation_id=evaluation_id,
         evaluation_fingerprint=evaluation_fingerprint,
-    )
-    persist(event)
-    return decision.model_copy(
-        update={"audit_event_id": event.event_id, "fingerprint": event.decision_fingerprint}
     )
 
 

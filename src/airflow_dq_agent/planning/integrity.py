@@ -17,6 +17,7 @@ from airflow_dq_agent.contracts.models import (
     EvalReport,
     EvalScore,
     ExecutablePlanItem,
+    HumanDecision,
     NonExecutablePlanItem,
     QualitySuiteReport,
     RemediationPlan,
@@ -183,6 +184,31 @@ def verify_evaluation_integrity(
             f"Refusing {refusing}: evaluation does not belong to this remediation plan"
         )
     return fingerprint
+
+
+def verify_decision_integrity(
+    decision: HumanDecision,
+    *,
+    refusing: str,
+    event_fingerprint: str | None,
+) -> str:
+    """Recompute the received Human Decision payload against its durable fingerprint."""
+    expected = decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
+    )
+    if event_fingerprint != expected:
+        raise PermissionError(
+            f"Refusing {refusing}: human decision fingerprint does not match received payload"
+        )
+    if decision.fingerprint and decision.fingerprint != expected:
+        raise PermissionError(
+            f"Refusing {refusing}: human decision fingerprint does not match received payload"
+        )
+    return expected
 
 
 def verify_admission_integrity(
