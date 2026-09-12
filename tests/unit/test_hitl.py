@@ -350,6 +350,22 @@ def test_validator_accepts_timeout_without_identity() -> None:
     assert validate_human_decision(decision, approver_ids=_APPROVER_IDS) is decision
 
 
+def test_recorder_does_not_attribute_timeout_to_a_human_actor() -> None:
+    report = seeded_failure_report()
+    events = []
+
+    with pytest.raises(PermissionError, match="no identity"):
+        record_human_decision(
+            HumanDecision(decision="Timeout", actor="approver-1", note=None),
+            approver_ids=_APPROVER_IDS,
+            quality_run_id=report.run_id,
+            predecessor=quality_report_event(report),
+            persist=events.append,
+        )
+
+    assert events == []
+
+
 def test_validator_refuses_unknown_outcome_kind() -> None:
     decision = HumanDecision(decision="shadow_skip", actor="approver-1", note="n/a")
 

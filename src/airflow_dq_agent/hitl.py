@@ -73,6 +73,8 @@ def validate_human_decision(decision: HumanDecision, *, approver_ids: Set[str]) 
     if decision.decision not in _RECORDABLE_KINDS:
         raise PermissionError("Refusing Human Decision: unknown outcome kind")
     if decision.decision == "Timeout":
+        if decision.actor != "airflow-timeout":
+            raise PermissionError("Refusing Human Decision: timeout requires no identity")
         return decision
     if decision.actor not in approver_ids:
         raise PermissionError("Refusing Human Decision: actor is not allow-listed")
