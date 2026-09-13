@@ -7,6 +7,7 @@ from airflow_dq_agent.apply import apply_plan
 from airflow_dq_agent.contracts import (
     AuditEvent,
     CandidateAction,
+    DecisionBinding,
     EvalReport,
     HumanDecision,
     Proposal,
@@ -18,7 +19,7 @@ from airflow_dq_agent.contracts import (
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_plan
-from airflow_dq_agent.hitl import audit_approval_decision
+from airflow_dq_agent.hitl import record_human_decision
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
@@ -89,10 +90,12 @@ def _bound_approval(
         quality_run_id or plan.quality_run_id,
         decision,
         shown,
-        plan_id=plan.plan_id if plan_id is None else plan_id,
-        plan_fingerprint=plan.fingerprint if plan_fingerprint is None else plan_fingerprint,
-        evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id if plan_id is None else plan_id,
+            plan_fingerprint=plan.fingerprint if plan_fingerprint is None else plan_fingerprint,
+            evaluation_id=evaluation.evaluation_id,
+            evaluation_fingerprint=evaluation.fingerprint,
+        ),
     )
     return (
         decision.model_copy(update={"audit_event_id": event.event_id}),
@@ -207,8 +210,10 @@ def test_reject_audit_event_cannot_create_apply_admission() -> None:
         plan.quality_run_id,
         rejected,
         "evaluation-event-1",
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+        ),
     )
     forged = rejected.model_copy(update={"decision": "Approve", "audit_event_id": event.event_id})
 
@@ -236,8 +241,10 @@ def test_timeout_audit_event_cannot_create_apply_admission() -> None:
         plan.quality_run_id,
         timed_out,
         "evaluation-event-1",
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+        ),
     )
     forged = HumanDecision(
         decision="Approve",
@@ -385,7 +392,7 @@ def test_audited_approval_of_the_shown_review_receives_time_bounded_apply_admiss
     review = build_approval_review(plan, evaluation, ttl=timedelta(hours=24))
     review_audit = review_event(review, evaluation, "evaluation-event-1")
     events: list[AuditEvent] = [review_audit]
-    decision = audit_approval_decision(
+    decision = record_human_decision(
         {
             "chosen_options": ["Approve"],
             "params_input": {"approval_note": "Reviewed target set."},
@@ -397,11 +404,13 @@ def test_audited_approval_of_the_shown_review_receives_time_bounded_apply_admiss
         quality_run_id=plan.quality_run_id,
         predecessor=review_audit,
         persist=events.append,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        review_fingerprint=review.fingerprint,
-        evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            review_fingerprint=review.fingerprint,
+            evaluation_id=evaluation.evaluation_id,
+            evaluation_fingerprint=evaluation.fingerprint,
+        ),
     )
 
     admission = create_apply_admission(
@@ -597,7 +606,7 @@ def test_rewritten_actor_or_note_after_audit_cannot_create_apply_admission() -> 
     plan, evaluation, report = _evaluated_plan()
     events = []
     review = build_approval_review(plan, evaluation)
-    approved = audit_approval_decision(
+    approved = record_human_decision(
         {
             "chosen_options": ["Approve"],
             "params_input": {"approval_note": "Reviewed target set."},
@@ -608,9 +617,11 @@ def test_rewritten_actor_or_note_after_audit_cannot_create_apply_admission() -> 
         quality_run_id=report.run_id,
         predecessor=quality_report_event(report),
         persist=events.append,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        review_fingerprint=review.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            review_fingerprint=review.fingerprint,
+        ),
     )
 
     for rewritten in (

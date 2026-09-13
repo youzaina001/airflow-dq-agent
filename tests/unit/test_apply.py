@@ -16,6 +16,7 @@ from airflow_dq_agent.contracts.fingerprints import (
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     CandidateAction,
+    DecisionBinding,
     EvalReport,
     HumanDecision,
     Proposal,
@@ -221,10 +222,12 @@ def _approved_quarantine_plan(
         plan.quality_run_id,
         decision,
         shown,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            evaluation_id=evaluation.evaluation_id,
+            evaluation_fingerprint=evaluation.fingerprint,
+        ),
     )
     admission = create_apply_admission(
         plan,
@@ -337,10 +340,12 @@ def test_apply_uses_each_governed_action_mutation_capability(
         plan.quality_run_id,
         decision,
         shown,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            evaluation_id=evaluation.evaluation_id,
+            evaluation_fingerprint=evaluation.fingerprint,
+        ),
     )
     admission = create_apply_admission(
         plan,

@@ -145,11 +145,12 @@ def dq_daily() -> None:
             evaluation_data: dict[str, Any],
             decision_data: dict[str, Any],
         ) -> dict[str, Any]:
+            # Honest Reject/Timeout skip the apply branch; invalid decisions fail loudly.
             report = QualitySuiteReport.model_validate(report_data)
             plan = RemediationPlan.model_validate(evaluation_data["plan"])
             evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
             parsed_decision = HumanDecision.model_validate(decision_data)
-            if parsed_decision.decision != "Approve":
+            if parsed_decision.decision in {"Reject", "Timeout"}:
                 raise AirflowSkipException("HITL did not approve this remediation plan")
             return create_apply_admission(
                 plan,

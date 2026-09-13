@@ -13,12 +13,10 @@ from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.models import (
     AuditEvent,
     EvalReport,
-    HumanDecision,
     QualitySuiteReport,
 )
 from airflow_dq_agent.traces.lineage import (
     candidate_proposal_event,
-    decision_event,
     quality_report_event,
 )
 from airflow_dq_agent.warehouse.db import make_engine
@@ -186,38 +184,11 @@ def trace_agent_run(
     return candidate_event
 
 
-def append_human_decision(
-    quality_run_id: str,
-    predecessor: AuditEvent,
-    decision: HumanDecision,
-    *,
-    plan_id: str | None = None,
-    plan_fingerprint: str | None = None,
-    evaluation_id: str | None = None,
-    evaluation_fingerprint: str | None = None,
-    directory: Path | None = None,
-    dsn: str | None = None,
-) -> AuditEvent:
-    """Persist an attributable decision after identity and note validation."""
-    event = decision_event(
-        quality_run_id,
-        decision,
-        predecessor,
-        plan_id=plan_id,
-        plan_fingerprint=plan_fingerprint,
-        evaluation_id=evaluation_id,
-        evaluation_fingerprint=evaluation_fingerprint,
-    )
-    append_event(event, directory=directory, dsn=dsn)
-    return event
-
-
 __all__ = [
     "AuditSink",
     "JsonlAuditSink",
     "PostgresAuditSink",
     "append_event",
-    "append_human_decision",
     "record_quality_report",
     "trace_agent_run",
 ]

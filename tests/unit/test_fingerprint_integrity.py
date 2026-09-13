@@ -18,6 +18,7 @@ from airflow_dq_agent.contracts.models import (
     ApprovalReview,
     CandidateAction,
     CheckResult,
+    DecisionBinding,
     EvalReport,
     ExecutablePlanItem,
     HumanDecision,
@@ -36,6 +37,7 @@ from airflow_dq_agent.planning.integrity import (
     decision_payload_fingerprint,
     evaluation_payload_fingerprint,
     plan_payload_fingerprint,
+    verify_decision_integrity,
     verify_plan_integrity,
     warehouse_environment_id,
 )
@@ -137,10 +139,12 @@ def _approval(
         plan.quality_run_id,
         decision,
         shown,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            evaluation_id=evaluation.evaluation_id,
+            evaluation_fingerprint=evaluation.fingerprint,
+        ),
     )
     return (
         decision.model_copy(update={"audit_event_id": event.event_id}),
@@ -831,6 +835,78 @@ def test_payload_fingerprint_helpers_match_stored_honest_artifacts() -> None:
     assert (
         decision_event(plan.quality_run_id, decision, "predecessor-1").decision_fingerprint
         == expected_decision
+    )
+
+
+_DECISION_INTEGRITY_ID = "decision-integrity-1"
+_DECISION_INTEGRITY_AT = datetime(2026, 8, 29, 12, tzinfo=UTC)
+_DECISION_INTEGRITY_ACTOR = "approver-1"
+_DECISION_INTEGRITY_NOTE = "Reviewed target set."
+_DECISION_INTEGRITY_REFUSAL = (
+    "Refusing admission: human decision fingerprint does not match received payload"
+)
+
+
+def _integrity_decision_fingerprint() -> str:
+    return decision_payload_fingerprint(
+        decision_id=_DECISION_INTEGRITY_ID,
+        decision="Approve",
+        actor=_DECISION_INTEGRITY_ACTOR,
+        note=_DECISION_INTEGRITY_NOTE,
+        decided_at=_DECISION_INTEGRITY_AT,
+    )
+
+
+def _integrity_decision(*, fingerprint: str | None = None) -> HumanDecision:
+    return HumanDecision(
+        decision_id=_DECISION_INTEGRITY_ID,
+        decision="Approve",
+        actor=_DECISION_INTEGRITY_ACTOR,
+        note=_DECISION_INTEGRITY_NOTE,
+        decided_at=_DECISION_INTEGRITY_AT,
+        fingerprint=fingerprint,
+    )
+
+
+def test_verify_decision_integrity_accepts_matching_payload_and_event_fingerprint() -> None:
+    fingerprint = _integrity_decision_fingerprint()
+    decision = _integrity_decision(fingerprint=fingerprint)
+
+    assert (
+        verify_decision_integrity(decision, refusing="admission", event_fingerprint=fingerprint)
+        is None
+    )
+
+
+def test_verify_decision_integrity_refuses_stale_event_fingerprint() -> None:
+    fingerprint = _integrity_decision_fingerprint()
+    decision = _integrity_decision(fingerprint=fingerprint)
+
+    with pytest.raises(PermissionError) as refused:
+        verify_decision_integrity(
+            decision, refusing="admission", event_fingerprint="sha256:stale-event"
+        )
+    assert str(refused.value) == _DECISION_INTEGRITY_REFUSAL
+
+
+def test_verify_decision_integrity_refuses_forged_decision_fingerprint() -> None:
+    fingerprint = _integrity_decision_fingerprint()
+    decision = _integrity_decision(fingerprint="sha256:forged-decision")
+
+    with pytest.raises(PermissionError) as refused:
+        verify_decision_integrity(decision, refusing="admission", event_fingerprint=fingerprint)
+    assert str(refused.value) == _DECISION_INTEGRITY_REFUSAL
+
+
+def test_verify_decision_integrity_interpolates_refusing_label() -> None:
+    decision = _integrity_decision(fingerprint=_integrity_decision_fingerprint())
+
+    with pytest.raises(PermissionError) as refused:
+        verify_decision_integrity(
+            decision, refusing="apply", event_fingerprint="sha256:stale-event"
+        )
+    assert str(refused.value) == (
+        "Refusing apply: human decision fingerprint does not match received payload"
     )
 
 
