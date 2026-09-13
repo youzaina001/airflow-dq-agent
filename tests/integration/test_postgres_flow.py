@@ -7,7 +7,12 @@ from sqlalchemy import text
 
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.apply import apply_plan
-from airflow_dq_agent.contracts.models import CheckStatus, ExecutablePlanItem, HumanDecision
+from airflow_dq_agent.contracts.models import (
+    CheckStatus,
+    DecisionBinding,
+    ExecutablePlanItem,
+    HumanDecision,
+)
 from airflow_dq_agent.demo import seed_warehouse
 from airflow_dq_agent.demo.defects import EXPECTED_DEFECTS
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
@@ -91,10 +96,12 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
         quality_run_id=report.run_id,
         predecessor=review_audit_event,
         persist=persist_decision,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        evaluation_id=evaluation.evaluation_id,
-        evaluation_fingerprint=evaluation.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            evaluation_id=evaluation.evaluation_id,
+            evaluation_fingerprint=evaluation.fingerprint,
+        ),
     )
     audit_repository = PostgresAuditRepository(warehouse_dsn)
     decision_audit_event = audit_repository.get(audited_decision.audit_event_id)

@@ -9,7 +9,9 @@ from pydantic import ValidationError
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts import (
     ApprovalReview,
+    AuditEvent,
     CandidateAction,
+    DecisionBinding,
     EvalReport,
     HumanDecision,
     Proposal,
@@ -20,7 +22,6 @@ from airflow_dq_agent.contracts import (
 from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.hitl import (
-    audit_approval_decision,
     audit_then_complete_approval,
     parse_approval_output,
     record_human_decision,
@@ -62,6 +63,29 @@ def _evaluated_plan() -> tuple[RemediationPlan, EvalReport]:
     return plan, evaluate_plan(plan)
 
 
+_APPROVER_IDS = {"approver-1"}
+
+
+def _approval_output() -> dict[str, object]:
+    return {
+        "chosen_options": ["Approve"],
+        "params_input": {"approval_note": "Reviewed exact target counts."},
+        "responded_by_user": {"id": "approver-1"},
+        "timedout": False,
+    }
+
+
+def _record_approval(events: list[AuditEvent]) -> HumanDecision:
+    report = seeded_failure_report()
+    return record_human_decision(
+        _approval_output(),
+        approver_ids=_APPROVER_IDS,
+        quality_run_id=report.run_id,
+        predecessor=quality_report_event(report),
+        persist=events.append,
+    )
+
+
 def test_structured_approval_requires_allowlisted_actor_and_note() -> None:
     decision = parse_approval_output(
         {
@@ -95,20 +119,8 @@ def test_structured_timeout_is_not_a_human_approval() -> None:
 
 
 def test_audited_approval_persists_the_actor_and_note_before_returning() -> None:
-    report = seeded_failure_report()
-    events = []
-    decision = audit_approval_decision(
-        {
-            "chosen_options": ["Approve"],
-            "params_input": {"approval_note": "Reviewed exact target counts."},
-            "responded_by_user": {"id": "approver-1"},
-            "timedout": False,
-        },
-        approver_ids={"approver-1"},
-        quality_run_id=report.run_id,
-        predecessor=quality_report_event(report),
-        persist=events.append,
-    )
+    events: list[AuditEvent] = []
+    decision = _record_approval(events)
 
     assert decision.audit_event_id == events[0].event_id
     assert events[0].decision_actor == "approver-1"
@@ -119,20 +131,8 @@ def test_audited_approval_persists_the_actor_and_note_before_returning() -> None
 
 
 def test_audited_approval_returns_fingerprint_matching_persisted_event() -> None:
-    report = seeded_failure_report()
-    events = []
-    decision = audit_approval_decision(
-        {
-            "chosen_options": ["Approve"],
-            "params_input": {"approval_note": "Reviewed exact target counts."},
-            "responded_by_user": {"id": "approver-1"},
-            "timedout": False,
-        },
-        approver_ids={"approver-1"},
-        quality_run_id=report.run_id,
-        predecessor=quality_report_event(report),
-        persist=events.append,
-    )
+    events: list[AuditEvent] = []
+    decision = _record_approval(events)
 
     assert decision.fingerprint
     assert decision.fingerprint == events[0].decision_fingerprint
@@ -141,7 +141,7 @@ def test_audited_approval_returns_fingerprint_matching_persisted_event() -> None
 def test_audited_rejection_is_persisted_before_airflow_can_skip_downstream_tasks() -> None:
     report = seeded_failure_report()
     events = []
-    decision = audit_approval_decision(
+    decision = record_human_decision(
         {
             "chosen_options": ["Reject"],
             "params_input": {"approval_note": "Target scope needs review."},
@@ -268,21 +268,18 @@ def test_approval_review_fingerprint_changes_when_reversible_flips(
 def test_audited_approval_binds_the_shown_review_fingerprint() -> None:
     plan, evaluation = _evaluated_plan()
     review = build_approval_review(plan, evaluation)
-    events = []
-    decision = audit_approval_decision(
-        {
-            "chosen_options": ["Approve"],
-            "params_input": {"approval_note": "Reviewed exact target counts."},
-            "responded_by_user": {"id": "approver-1"},
-            "timedout": False,
-        },
-        approver_ids={"approver-1"},
+    events: list[AuditEvent] = []
+    decision = record_human_decision(
+        _approval_output(),
+        approver_ids=_APPROVER_IDS,
         quality_run_id=plan.quality_run_id,
         predecessor=quality_report_event(seeded_failure_report()),
         persist=events.append,
-        plan_id=plan.plan_id,
-        plan_fingerprint=plan.fingerprint,
-        review_fingerprint=review.fingerprint,
+        binding=DecisionBinding(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            review_fingerprint=review.fingerprint,
+        ),
     )
 
     assert decision.review_fingerprint == review.fingerprint
@@ -328,9 +325,6 @@ def test_glossary_names_decision_recording_and_fingerprint() -> None:
     assert "Apply Admission" in recording
     assert "Human Decision" in fingerprint
     assert "decision_id" in fingerprint or "decision id" in fingerprint.lower()
-
-
-_APPROVER_IDS = {"approver-1"}
 
 
 def test_validator_accepts_approve_with_allowlisted_actor_and_note() -> None:
@@ -450,20 +444,8 @@ def test_recorder_persists_once_before_returning() -> None:
 
 
 def test_recorder_composes_provider_shaped_parser() -> None:
-    report = seeded_failure_report()
-    events = []
-    decision = record_human_decision(
-        {
-            "chosen_options": ["Approve"],
-            "params_input": {"approval_note": "Reviewed exact target counts."},
-            "responded_by_user": {"id": "approver-1"},
-            "timedout": False,
-        },
-        approver_ids=_APPROVER_IDS,
-        quality_run_id=report.run_id,
-        predecessor=quality_report_event(report),
-        persist=events.append,
-    )
+    events: list[AuditEvent] = []
+    decision = _record_approval(events)
 
     assert decision.decision == "Approve"
     assert decision.actor == "approver-1"

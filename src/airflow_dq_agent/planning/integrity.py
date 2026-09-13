@@ -100,6 +100,17 @@ def decision_payload_fingerprint(
     )
 
 
+def human_decision_fingerprint(decision: HumanDecision) -> str:
+    """Canonical fingerprint of one Human Decision payload."""
+    return decision_payload_fingerprint(
+        decision_id=decision.decision_id,
+        decision=decision.decision,
+        actor=decision.actor,
+        note=decision.note,
+        decided_at=decision.decided_at,
+    )
+
+
 def admission_payload_fingerprint(
     *,
     admission_id: str,
@@ -191,24 +202,13 @@ def verify_decision_integrity(
     *,
     refusing: str,
     event_fingerprint: str | None,
-) -> str:
+) -> None:
     """Recompute the received Human Decision payload against its durable fingerprint."""
-    expected = decision_payload_fingerprint(
-        decision_id=decision.decision_id,
-        decision=decision.decision,
-        actor=decision.actor,
-        note=decision.note,
-        decided_at=decision.decided_at,
-    )
-    if event_fingerprint != expected:
+    expected = human_decision_fingerprint(decision)
+    if event_fingerprint != expected or (decision.fingerprint and decision.fingerprint != expected):
         raise PermissionError(
             f"Refusing {refusing}: human decision fingerprint does not match received payload"
         )
-    if decision.fingerprint and decision.fingerprint != expected:
-        raise PermissionError(
-            f"Refusing {refusing}: human decision fingerprint does not match received payload"
-        )
-    return expected
 
 
 def verify_admission_integrity(

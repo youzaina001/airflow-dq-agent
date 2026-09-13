@@ -371,6 +371,16 @@ class HumanDecision(BaseModel):
     note: str | None = None
 
 
+class DecisionBinding(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    plan_id: str | None = None
+    plan_fingerprint: str | None = None
+    review_fingerprint: str | None = None
+    evaluation_id: str | None = None
+    evaluation_fingerprint: str | None = None
+
+
 class ToolCallRecord(BaseModel):
     name: str
     args: dict[str, Any] = Field(default_factory=dict)
