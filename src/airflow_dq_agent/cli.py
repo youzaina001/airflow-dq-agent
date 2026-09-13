@@ -18,6 +18,7 @@ from airflow_dq_agent.contracts.models import (
 )
 from airflow_dq_agent.demo import green_report, register_demo, seed_warehouse, seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
+from airflow_dq_agent.quality.sanitize import sample_free_report
 from airflow_dq_agent.quality.suite import run_quality_suite
 from airflow_dq_agent.traces import trace_agent_run
 
@@ -73,12 +74,33 @@ def _print_scores(label: str, evaluation: EvalReport) -> None:
     print(f"{label}: {'PASS' if evaluation.passed else 'FAIL'} ({scores})")
 
 
+def _next_action(report: QualitySuiteReport) -> str:
+    if report.incomplete:
+        return "correct check execution or configuration; do not review a remediation plan"
+    if report.failed_count:
+        return "compile and evaluate a remediation plan from failed checks"
+    return "no remediation is required"
+
+
+def _print_suite_outcome(report: QualitySuiteReport) -> None:
+    print(f"suite: {report.outcome_summary()}")
+    print(f"next: {_next_action(report)}")
+
+
+def _quality_exit(report: QualitySuiteReport, *, evaluation_blocked: bool = False) -> int:
+    if report.incomplete:
+        return 2
+    if report.failed_count or evaluation_blocked:
+        return 1
+    return 0
+
+
 def command_demo(no_db: bool) -> int:
     report = _report(no_db)
     agent_run = run_proposal_agent(report)
     evaluation = evaluate_proposal(report, agent_run.proposal)
     trace = trace_agent_run(agent_run, report, evaluation)
-    print(f"suite: {report.failed_count} failed, {report.passed_count} passed")
+    _print_suite_outcome(report)
     print(
         f"candidate: {len(agent_run.proposal.candidate_actions)} action request(s), mode={agent_run.llm_mode}"
     )
@@ -95,7 +117,22 @@ def command_demo(no_db: bool) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Governed Airflow data-quality operator")
+    parser = argparse.ArgumentParser(
+        description="Governed Airflow data-quality operator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Exit categories (do not infer warehouse mutation from status):\n"
+            "  suite: exit 0 completed all-pass; exit 1 completed quality failure; "
+            "exit 2 setup or incomplete-check errors.\n"
+            "  propose: exit 0 completed all-pass; exit 1 completed quality failure; "
+            "exit 2 setup or incomplete-check errors.\n"
+            "  eval: exit 0 completed all-pass with passing evaluation; "
+            "exit 1 completed quality failure or blocked evaluation; "
+            "exit 2 setup or incomplete-check errors.\n"
+            "  demo: exit 0 on a successful demonstration.\n"
+            "  seed: exit 0 after recreating the warehouse."
+        ),
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("seed", help="recreate the deterministic local warehouse")
     for name in ("suite", "propose", "eval", "demo"):
@@ -115,16 +152,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "demo":
         return command_demo(args.no_db)
-    report = _report(args.no_db)
+    try:
+        report = _report(args.no_db)
+    except Exception:
+        print("suite: incomplete: setup or execution error")
+        print("next: correct check execution or configuration; do not review a remediation plan")
+        return 2
+    _print_suite_outcome(report)
     if args.command == "suite":
-        _print_json(report)
-        return 0
+        _print_json(sample_free_report(report))
+        return _quality_exit(report)
     agent_run = run_proposal_agent(report)
     if args.command == "propose":
         _print_json(agent_run)
-        return 0
-    _print_json(evaluate_proposal(report, agent_run.proposal))
-    return 0
+        return _quality_exit(report)
+    evaluation = evaluate_proposal(report, agent_run.proposal)
+    _print_json(evaluation)
+    return _quality_exit(report, evaluation_blocked=not evaluation.passed)
 
 
 if __name__ == "__main__":
