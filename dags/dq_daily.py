@@ -30,7 +30,7 @@ from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candidate_proposal_event
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
-from airflow_dq_agent.warehouse.db import make_engine
+from airflow_dq_agent.warehouse.db import make_engine, resolve_read_dsn
 
 register_demo()
 settings = get_settings()
@@ -52,7 +52,7 @@ def dq_daily() -> None:
         # XCom is durable storage, like JSONL and Postgres audit lineage. The
         # report crosses this boundary through an allow-list of named fields:
         # IDs, counts, messages, and observed columns; never sample_failures.
-        return sample_free_report(run_quality_suite(settings.read_dsn or settings.warehouse_dsn))
+        return sample_free_report(run_quality_suite(resolve_read_dsn()))
 
     @task
     def propose_task(report_data: dict[str, Any]) -> dict[str, Any]:
@@ -95,7 +95,7 @@ def dq_daily() -> None:
             report,
             proposal,
             target_sets=PostgresTargetSetResolver(
-                engine=make_engine(settings.read_dsn or settings.warehouse_dsn)
+                engine=make_engine(resolve_read_dsn())
             ),
         )
         event = plan_event(plan, str(candidate_data["candidate_event_id"]))
