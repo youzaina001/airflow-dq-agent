@@ -84,10 +84,12 @@ def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
             quality_run_id=report.run_id,
             predecessor=review_audit_event,
             persist=persist_decision,
-            plan_id=plan.plan_id,
-            plan_fingerprint=plan.fingerprint,
-            evaluation_id=evaluation.evaluation_id,
-            evaluation_fingerprint=evaluation.fingerprint,
+            binding=DecisionBinding(
+                plan_id=plan.plan_id,
+                plan_fingerprint=plan.fingerprint,
+                evaluation_id=evaluation.evaluation_id,
+                evaluation_fingerprint=evaluation.fingerprint,
+            ),
         )
 
     audited_decision = record_human_decision(
