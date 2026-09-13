@@ -39,3 +39,11 @@ _Avoid_: Approval, permission
 **Human Decision**:
 An attributable, authorized response on one evaluated remediation plan, bound to that plan's identity and Audit Lineage event. Approval and non-human timeout are distinct outcomes.
 _Avoid_: Approval, button click
+
+**Decision Recording**:
+The one validated path that records a Human Decision: validate, fingerprint, persist Audit Lineage, then attach the audit event id. A fully hand-forged Human Decision that already matches Audit Lineage would still pass Apply Admission.
+_Avoid_: Unvalidated persist, hand-stitched audit id
+
+**Decision Fingerprint**:
+The canonical digest of a Human Decision payload covering decision_id, outcome, actor, note, and decided_at.
+_Avoid_: Review fingerprint, audit event id

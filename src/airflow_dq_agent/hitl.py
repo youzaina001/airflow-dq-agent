@@ -6,8 +6,8 @@ from collections.abc import Callable, Mapping, Set
 from datetime import UTC, datetime
 from typing import Any
 
-from airflow_dq_agent.contracts.models import AuditEvent, HumanDecision
-from airflow_dq_agent.planning.integrity import decision_payload_fingerprint
+from airflow_dq_agent.contracts.models import AuditEvent, DecisionBinding, HumanDecision
+from airflow_dq_agent.planning.integrity import human_decision_fingerprint
 from airflow_dq_agent.traces.lineage import decision_event
 
 
@@ -90,81 +90,17 @@ def record_human_decision(
     quality_run_id: str,
     predecessor: AuditEvent | str,
     persist: Callable[[AuditEvent], None],
-    plan_id: str | None = None,
-    plan_fingerprint: str | None = None,
-    review_fingerprint: str | None = None,
-    evaluation_id: str | None = None,
-    evaluation_fingerprint: str | None = None,
+    binding: DecisionBinding | None = None,
 ) -> HumanDecision:
     """Validate, fingerprint, persist Audit Lineage, then return the bound Human Decision."""
     if not isinstance(decision, HumanDecision):
         decision = parse_approval_output(decision, approver_ids=approver_ids)
     decision = validate_human_decision(decision, approver_ids=approver_ids)
-    decision = decision.model_copy(
-        update={
-            "fingerprint": decision_payload_fingerprint(
-                decision_id=decision.decision_id,
-                decision=decision.decision,
-                actor=decision.actor,
-                note=decision.note,
-                decided_at=decision.decided_at,
-            )
-        }
-    )
-    if review_fingerprint and review_fingerprint.strip():
-        decision = decision.model_copy(update={"review_fingerprint": review_fingerprint})
-    event = decision_event(
-        quality_run_id,
-        decision,
-        predecessor,
-        plan_id=plan_id,
-        plan_fingerprint=plan_fingerprint,
-        evaluation_id=evaluation_id,
-        evaluation_fingerprint=evaluation_fingerprint,
-    )
-    persist(event)
-    return decision.model_copy(
-        update={"audit_event_id": event.event_id, "fingerprint": event.decision_fingerprint}
-    )
-
-
-def audit_approval_decision(
-    output: Mapping[str, Any],
-    *,
-    approver_ids: Set[str],
-    quality_run_id: str,
-    predecessor: AuditEvent | str,
-    persist: Callable[[AuditEvent], None],
-    plan_id: str | None = None,
-    plan_fingerprint: str | None = None,
-    review_fingerprint: str | None = None,
-    evaluation_id: str | None = None,
-    evaluation_fingerprint: str | None = None,
-) -> HumanDecision:
-    """Persist a parsed decision before returning it to any downstream admission path."""
-    decision = parse_approval_output(output, approver_ids=approver_ids)
-    decision = decision.model_copy(
-        update={
-            "fingerprint": decision_payload_fingerprint(
-                decision_id=decision.decision_id,
-                decision=decision.decision,
-                actor=decision.actor,
-                note=decision.note,
-                decided_at=decision.decided_at,
-            )
-        }
-    )
-    if review_fingerprint and review_fingerprint.strip():
-        decision = decision.model_copy(update={"review_fingerprint": review_fingerprint})
-    event = decision_event(
-        quality_run_id,
-        decision,
-        predecessor,
-        plan_id=plan_id,
-        plan_fingerprint=plan_fingerprint,
-        evaluation_id=evaluation_id,
-        evaluation_fingerprint=evaluation_fingerprint,
-    )
+    decision = decision.model_copy(update={"fingerprint": human_decision_fingerprint(decision)})
+    resolved = binding or DecisionBinding()
+    if resolved.review_fingerprint and resolved.review_fingerprint.strip():
+        decision = decision.model_copy(update={"review_fingerprint": resolved.review_fingerprint})
+    event = decision_event(quality_run_id, decision, predecessor, binding=binding)
     persist(event)
     return decision.model_copy(
         update={"audit_event_id": event.event_id, "fingerprint": event.decision_fingerprint}
@@ -179,24 +115,16 @@ def audit_then_complete_approval(
     predecessor: AuditEvent | str,
     persist: Callable[[AuditEvent], None],
     complete_provider: Callable[[], object],
-    plan_id: str | None = None,
-    plan_fingerprint: str | None = None,
-    review_fingerprint: str | None = None,
-    evaluation_id: str | None = None,
-    evaluation_fingerprint: str | None = None,
+    binding: DecisionBinding | None = None,
 ) -> HumanDecision:
     """Durably audit the outcome before the provider can branch or skip tasks."""
-    decision = audit_approval_decision(
+    decision = record_human_decision(
         output,
         approver_ids=approver_ids,
         quality_run_id=quality_run_id,
         predecessor=predecessor,
         persist=persist,
-        plan_id=plan_id,
-        plan_fingerprint=plan_fingerprint,
-        review_fingerprint=review_fingerprint,
-        evaluation_id=evaluation_id,
-        evaluation_fingerprint=evaluation_fingerprint,
+        binding=binding,
     )
     complete_provider()
     return decision

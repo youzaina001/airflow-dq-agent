@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
-from airflow_dq_agent.contracts.models import AuditEvent
+from airflow_dq_agent.contracts.models import AuditEvent, DecisionBinding
 from airflow_dq_agent.hitl import audit_then_complete_approval
 from airflow_dq_agent.traces import append_event
 
@@ -107,10 +107,12 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
             complete_provider=lambda: super(AuditedApprovalOperator, self).execute_complete(
                 context=context, event=event
             ),
-            plan_id=self.plan_id,
-            plan_fingerprint=self.plan_fingerprint,
-            review_fingerprint=self.review_fingerprint,
-            evaluation_id=self.evaluation_id,
-            evaluation_fingerprint=self.evaluation_fingerprint,
+            binding=DecisionBinding(
+                plan_id=self.plan_id,
+                plan_fingerprint=self.plan_fingerprint,
+                review_fingerprint=self.review_fingerprint,
+                evaluation_id=self.evaluation_id,
+                evaluation_fingerprint=self.evaluation_fingerprint,
+            ),
         )
         return decision.model_dump(mode="json")

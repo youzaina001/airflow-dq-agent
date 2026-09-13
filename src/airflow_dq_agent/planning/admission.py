@@ -14,7 +14,7 @@ from airflow_dq_agent.contracts.models import (
 )
 from airflow_dq_agent.planning.integrity import (
     admission_payload_fingerprint,
-    decision_payload_fingerprint,
+    verify_decision_integrity,
     verify_evaluation_integrity,
     verify_executable_params,
     verify_plan_integrity,
@@ -57,21 +57,11 @@ def _verify_durable_approval(
         raise PermissionError(
             "Refusing admission: human decision actor does not match audit lineage"
         )
-    expected = decision_payload_fingerprint(
-        decision_id=decision.decision_id,
-        decision=decision.decision,
-        actor=decision.actor,
-        note=decision.note,
-        decided_at=decision.decided_at,
+    verify_decision_integrity(
+        decision,
+        refusing="admission",
+        event_fingerprint=event.decision_fingerprint,
     )
-    if event.decision_fingerprint != expected:
-        raise PermissionError(
-            "Refusing admission: human decision fingerprint does not match received payload"
-        )
-    if decision.fingerprint and decision.fingerprint != expected:
-        raise PermissionError(
-            "Refusing admission: human decision fingerprint does not match received payload"
-        )
     if (
         event.evaluation_id != evaluation.evaluation_id
         or event.evaluation_fingerprint != evaluation.fingerprint
@@ -125,8 +115,6 @@ def create_apply_admission(
     evaluation_fingerprint = verify_evaluation_integrity(plan, evaluation, refusing="admission")
     if decision.decision != "Approve":
         raise PermissionError("Refusing admission: human decision is not an approval")
-    if not decision.actor.strip() or not decision.note or not decision.note.strip():
-        raise PermissionError("Refusing admission: approval requires an actor and non-empty note")
     audit_event_id = _verify_durable_approval(
         plan,
         evaluation,
