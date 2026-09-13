@@ -256,7 +256,7 @@ def verify_executable_params(
         raise PermissionError(
             f"Refusing {refusing}: quality report does not belong to this remediation plan"
         )
-    report_failures = {check.check_id: check for check in report.failed_checks}
+    report_failures = check_policy.failed_checks_by_id(report)
     covered: set[str] = set()
     seen_identities: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
     for item in plan.items:
@@ -286,8 +286,7 @@ def verify_executable_params(
                 covered.add(evidence.check_id)
         except (KeyError, ValueError) as exc:
             raise PermissionError(
-                f"Refusing {refusing}: quality evidence is not a failed check in this "
-                f"quality run ({exc})"
+                f"Refusing {refusing}: Check Policy refused the requested action ({exc})"
             ) from exc
         if ExecutablePlanItem.freeze_params(derived) != item.params:
             raise PermissionError(f"Refusing {refusing}: item parameters do not match Check Policy")

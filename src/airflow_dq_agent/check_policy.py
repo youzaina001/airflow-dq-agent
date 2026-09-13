@@ -9,11 +9,11 @@ changing this rule changes every governed refusal.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from airflow_dq_agent.action_definitions import get_governed_action
-from airflow_dq_agent.contracts.models import CheckResult, QualityEvidence
+from airflow_dq_agent.contracts.models import CheckResult, QualityEvidence, QualitySuiteReport
 from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 
 
@@ -21,12 +21,17 @@ class PolicyRefusal(ValueError):
     """A requested action is not justified by the Check Policy."""
 
 
+def failed_checks_by_id(report: QualitySuiteReport) -> dict[str, CheckResult]:
+    """The failed checks of one report, keyed for Check Policy justification."""
+    return {check.check_id: check for check in report.failed_checks}
+
+
 @dataclass(frozen=True)
 class CheckPolicyJustification:
     """The cited Check Specs and derived controlled parameters of one justified action."""
 
     specs: tuple[CheckSpec, ...]
-    params: dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any]
 
 
 def justify_action(
@@ -61,7 +66,7 @@ def justify_action(
     try:
         params = governed.derive_params(specs[0])
         consistent = all(governed.derive_params(spec) == params for spec in specs[1:])
-    except ValueError as exc:
+    except (KeyError, ValueError) as exc:
         raise PolicyRefusal("check policy does not produce a bindable controlled action") from exc
     if not consistent:
         raise PolicyRefusal("evidence requires incompatible controlled parameter values")

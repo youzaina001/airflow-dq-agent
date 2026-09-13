@@ -139,7 +139,7 @@ def _allowlist_score(proposal: Proposal) -> EvalScore:
 
 
 def _check_policy_score(report: QualitySuiteReport, proposal: Proposal) -> EvalScore:
-    failures = {check.check_id: check for check in report.failed_checks}
+    failures = check_policy.failed_checks_by_id(report)
     illegal: list[str] = []
     covered: set[str] = set()
     for action in proposal.candidate_actions:

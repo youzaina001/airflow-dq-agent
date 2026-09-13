@@ -23,7 +23,7 @@ def safe_proposal_for_xcom(report: QualitySuiteReport, proposal: Proposal) -> di
     quality report cross into XCom. Unexpected identifiers fail closed without being
     included in the error message or a task return value.
     """
-    report_failures = {check.check_id: check for check in report.failed_checks}
+    report_failures = check_policy.failed_checks_by_id(report)
     safe_actions: list[CandidateAction] = []
     for requested in proposal.candidate_actions:
         try:

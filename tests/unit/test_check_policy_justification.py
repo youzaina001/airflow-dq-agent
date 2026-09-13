@@ -37,8 +37,7 @@ def _completeness_scenario() -> tuple[QualitySuiteReport, QualityEvidence]:
     return scoped, evidence
 
 
-def _declared_proposal(scoped: QualitySuiteReport, evidence: QualityEvidence) -> Proposal:
-    del scoped
+def _declared_proposal(evidence: QualityEvidence) -> Proposal:
     return Proposal(
         summary="Quarantine the failed completeness rows.",
         root_cause_hypothesis="The source omitted a required total.",
@@ -53,8 +52,7 @@ def _declared_proposal(scoped: QualitySuiteReport, evidence: QualityEvidence) ->
     )
 
 
-def _undeclared_proposal(scoped: QualitySuiteReport, evidence: QualityEvidence) -> Proposal:
-    del scoped
+def _undeclared_proposal(evidence: QualityEvidence) -> Proposal:
     return Proposal(
         summary="Fill missing totals.",
         root_cause_hypothesis="A catalogued action was requested without a declared policy.",
@@ -72,7 +70,7 @@ def _undeclared_proposal(scoped: QualitySuiteReport, evidence: QualityEvidence) 
 def _compiled_plan(scoped: QualitySuiteReport, evidence: QualityEvidence) -> RemediationPlan:
     return compile_remediation_plan(
         scoped,
-        _declared_proposal(scoped, evidence),
+        _declared_proposal(evidence),
         target_sets=_TargetSets(),
     )
 
@@ -98,7 +96,7 @@ def _recomputed_plan(plan: RemediationPlan, *, updates: dict) -> RemediationPlan
 
 def test_declared_evidence_backed_action_passes_every_governed_seam() -> None:
     scoped, evidence = _completeness_scenario()
-    proposal = _declared_proposal(scoped, evidence)
+    proposal = _declared_proposal(evidence)
 
     evaluation = evaluate_proposal(scoped, proposal)
     payload = safe_proposal_for_xcom(scoped, proposal)
@@ -116,7 +114,7 @@ def test_declared_evidence_backed_action_passes_every_governed_seam() -> None:
 
 def test_undeclared_action_is_refused_at_every_governed_seam() -> None:
     scoped, evidence = _completeness_scenario()
-    proposal = _undeclared_proposal(scoped, evidence)
+    proposal = _undeclared_proposal(evidence)
 
     evaluation = evaluate_proposal(scoped, proposal)
     assert evaluation.passed is False
@@ -134,7 +132,7 @@ def test_undeclared_action_is_refused_at_every_governed_seam() -> None:
     tampered = _recomputed_plan(
         _compiled_plan(scoped, evidence), updates={"action_id": "null_fill"}
     )
-    with pytest.raises(PermissionError, match="not a failed check in this quality run"):
+    with pytest.raises(PermissionError, match="Check Policy refused the requested action"):
         verify_executable_params(tampered, report=scoped, refusing="apply")
 
 
@@ -142,7 +140,7 @@ def test_changing_the_legality_rule_changes_all_four_refusals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scoped, evidence = _completeness_scenario()
-    proposal = _declared_proposal(scoped, evidence)
+    proposal = _declared_proposal(evidence)
 
     evaluation = evaluate_proposal(scoped, proposal)
     plan = _compiled_plan(scoped, evidence)
@@ -172,7 +170,7 @@ def test_changing_the_legality_rule_changes_all_four_refusals(
     changed_plan = compile_remediation_plan(scoped, proposal, target_sets=_TargetSets())
     assert changed_plan.blocked is True
 
-    with pytest.raises(PermissionError, match="not a failed check in this quality run"):
+    with pytest.raises(PermissionError, match="Check Policy refused the requested action"):
         verify_executable_params(plan, report=scoped, refusing="apply")
 
 
@@ -185,6 +183,27 @@ def test_tampered_params_are_refused_at_apply_recompute() -> None:
 
     with pytest.raises(PermissionError, match="item parameters do not match Check Policy"):
         verify_executable_params(tampered, report=scoped, refusing="apply")
+
+
+def test_a_failing_derivation_is_refused_at_the_governed_seams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scoped, evidence = _completeness_scenario()
+    proposal = _declared_proposal(evidence)
+
+    class _Unbindable:
+        def derive_params(self, spec: object) -> dict[str, str]:
+            raise KeyError("Unknown table 'staging.orders'")
+
+    monkeypatch.setattr(check_policy, "get_governed_action", lambda _action_id: _Unbindable())
+
+    evaluation = evaluate_proposal(scoped, proposal)
+    check_policy_score = evaluation.get("check_policy")
+    assert check_policy_score is not None
+    assert check_policy_score.passed is False
+
+    with pytest.raises(PermissionError, match="unbounded candidate proposal"):
+        safe_proposal_for_xcom(scoped, proposal)
 
 
 def test_the_rule_cites_only_declared_failed_evidence() -> None:

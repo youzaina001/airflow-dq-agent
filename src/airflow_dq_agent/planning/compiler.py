@@ -103,7 +103,7 @@ def compile_remediation_plan(
 
     if not isinstance(report, QualitySuiteReport):
         report = QualitySuiteReport.model_validate(report)
-    report_failures = {check.check_id: check for check in report.failed_checks}
+    report_failures = check_policy.failed_checks_by_id(report)
     items: list[ExecutablePlanItem | NonExecutablePlanItem] = []
     covered: set[str] = set()
     duplicate_identities = {
