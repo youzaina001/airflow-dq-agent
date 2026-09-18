@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+import types
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from airflow_dq_agent.agent.runner import (
@@ -10,8 +17,11 @@ from airflow_dq_agent.agent.runner import (
     get_observed_schema,
     sample_failing_rows,
 )
+from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.quality.suite import run_quality_suite
 from airflow_dq_agent.warehouse.db import make_engine
+
+DAG_PATH = Path(__file__).resolve().parents[2] / "dags" / "dq_daily.py"
 
 READ_DSN = "postgresql+psycopg://reader:read-secret@read-host:65432/warehouse"
 WAREHOUSE_DSN = "postgresql+psycopg://warehouse:wh-secret@wh-host:5433/warehouse"
@@ -258,3 +268,104 @@ def test_malformed_read_dsn_has_controlled_error(
             sample_failing_rows(SAMPLE_CHECK_ID)
         else:
             get_observed_schema(OBSERVED_TABLE)
+
+
+def test_sample_failing_rows_uses_warehouse_only_when_no_read_override_or_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("READ_DSN", raising=False)
+    monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
+    monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
+    seen = _capture_engine(monkeypatch, RUNNER_ENGINE)
+
+    with pytest.raises(RuntimeError, match="engine-probe"):
+        sample_failing_rows(SAMPLE_CHECK_ID)
+
+    assert seen == [WAREHOUSE_DSN]
+
+
+def test_get_observed_schema_uses_warehouse_only_when_no_read_override_or_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("READ_DSN", raising=False)
+    monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
+    monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
+    seen = _capture_engine(monkeypatch, RUNNER_ENGINE)
+
+    with pytest.raises(RuntimeError, match="engine-probe"):
+        get_observed_schema(OBSERVED_TABLE)
+
+    assert seen == [WAREHOUSE_DSN]
+
+
+def _load_dag_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[types.ModuleType, dict[str, Callable[..., Any]]]:
+    unused = "postgresql+psycopg://dq:dq@localhost:1/unused-warehouse"
+    monkeypatch.setenv("WAREHOUSE_DSN", unused)
+    monkeypatch.delenv("READ_DSN", raising=False)
+    monkeypatch.delenv("AUDIT_DSN", raising=False)
+    monkeypatch.delenv("APPLY_DSN", raising=False)
+    monkeypatch.setenv("LLM_MODE", "stub")
+    monkeypatch.setenv("APPLY_MODE", "off")
+
+    exceptions_module = types.ModuleType("airflow.exceptions")
+
+    class AirflowSkipException(Exception): ...
+
+    exceptions_module.AirflowSkipException = AirflowSkipException
+    sdk_module = types.ModuleType("airflow.sdk")
+    tasks: dict[str, Callable[..., Any]] = {}
+
+    def _stub_dag(
+        *_args: Any, **_kwargs: Any
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
+            return fn
+
+        return wrap
+
+    def _stub_task(
+        fn: Callable[..., Any] | None = None, **_kwargs: Any
+    ) -> Callable[..., Any] | Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def register(candidate: Callable[..., Any]) -> Callable[..., Any]:
+            tasks[candidate.__name__] = candidate
+
+            def xcom_reference(*_call_args: Any, **_call_kwargs: Any) -> None:
+                return None
+
+            xcom_reference.__name__ = candidate.__name__
+            return xcom_reference
+
+        return register if fn is None else register(fn)
+
+    sdk_module.dag = _stub_dag
+    sdk_module.task = _stub_task
+    monkeypatch.setitem(sys.modules, "airflow", types.ModuleType("airflow"))
+    monkeypatch.setitem(sys.modules, "airflow.exceptions", exceptions_module)
+    monkeypatch.setitem(sys.modules, "airflow.sdk", sdk_module)
+
+    spec = importlib.util.spec_from_file_location("dq_daily_read_credentials", DAG_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module, tasks
+
+
+def test_dag_suite_uses_bound_settings_not_stale_process_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, tasks = _load_dag_tasks(monkeypatch)
+    seen: list[str | None] = []
+
+    def fake_suite(dsn: str | None = None):
+        seen.append(dsn)
+        return seeded_failure_report()
+
+    module.settings = module.settings.model_copy(
+        update={"warehouse_dsn": OVERRIDE_DSN, "read_dsn": None}
+    )
+    monkeypatch.setattr(module, "run_quality_suite", fake_suite)
+    tasks["run_suite_task"]()
+
+    assert seen == [OVERRIDE_DSN]
