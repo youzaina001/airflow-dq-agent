@@ -9,6 +9,7 @@ from uuid import uuid4
 import polars as pl
 from psycopg.errors import UndefinedTable
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import (
@@ -19,7 +20,11 @@ from airflow_dq_agent.contracts.models import (
 )
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS, get_table_contract
 from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckSpec
-from airflow_dq_agent.warehouse.db import make_engine
+from airflow_dq_agent.warehouse.db import (
+    make_engine,
+    raise_read_connection_failed,
+    resolve_read_dsn,
+)
 
 SAMPLE = 20
 
@@ -212,8 +217,11 @@ def run_suite_on_frames(frames: Mapping[str, pl.DataFrame]) -> QualitySuiteRepor
 
 
 def run_quality_suite(dsn: str | None = None) -> QualitySuiteReport:
-    engine = make_engine(dsn)
-    frames = load_frames(engine)
+    try:
+        engine = make_engine(resolve_read_dsn(dsn))
+        frames = load_frames(engine)
+    except (SQLAlchemyError, ValueError):
+        raise_read_connection_failed()
     report = run_suite_on_frames(frames)
     # In HITL mode this is a required Postgres audit write; shadow mode retains the
     # supplementary JSONL event only.  Either way per-check samples never leave the
