@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from airflow_dq_agent.catalog import service as catalog
 from airflow_dq_agent.config import Settings, get_settings
@@ -28,7 +29,11 @@ from airflow_dq_agent.contracts.models import (
 )
 from airflow_dq_agent.contracts.tables import get_table_contract
 from airflow_dq_agent.quality.registry import CHECK_SPECS
-from airflow_dq_agent.warehouse.db import make_engine
+from airflow_dq_agent.warehouse.db import (
+    make_engine,
+    raise_read_connection_failed,
+    resolve_read_dsn,
+)
 
 SYSTEM_PROMPT = """You are a governed data-quality proposal agent.
 Return only the Candidate Proposal contract. Each requested action must cite one
@@ -129,29 +134,35 @@ def sample_failing_rows(
     spec = CHECK_SPECS[check_id]
     if not spec.sample_sql:
         return []
-    engine = make_engine(dsn)
-    with engine.connect() as connection:
-        result = connection.execute(text(spec.sample_sql), {"limit": limit})
-        return [dict(row) for row in result.mappings()]
+    try:
+        engine = make_engine(resolve_read_dsn(dsn))
+        with engine.connect() as connection:
+            result = connection.execute(text(spec.sample_sql), {"limit": limit})
+            return [dict(row) for row in result.mappings()]
+    except (SQLAlchemyError, ValueError):
+        raise_read_connection_failed()
 
 
 def get_observed_schema(table: str, *, dsn: str | None = None) -> dict[str, str]:
     """Return observed column names/types for a contracted table."""
     contract = get_table_contract(table)
-    inspector = inspect(make_engine(dsn))
-    return {
-        str(column["name"]): str(column["type"])
-        for column in inspector.get_columns(contract.table, schema=contract.schema_name)
-    }
+    try:
+        inspector = inspect(make_engine(resolve_read_dsn(dsn)))
+        return {
+            str(column["name"]): str(column["type"])
+            for column in inspector.get_columns(contract.table, schema=contract.schema_name)
+        }
+    except (SQLAlchemyError, ValueError):
+        raise_read_connection_failed()
 
 
 def _sample_failing_rows_tool(check_id: str, limit: int = 20) -> list[dict[str, Any]]:
-    """Read rows from a declared failing-check sample using the configured warehouse only."""
+    """Read rows from a declared failing-check sample using configured read credentials."""
     return sample_failing_rows(check_id, limit)
 
 
 def _get_observed_schema_tool(table: str) -> dict[str, str]:
-    """Read the configured warehouse schema for one contracted table only."""
+    """Read observed schema for one contracted table using configured read credentials."""
     return get_observed_schema(table)
 
 

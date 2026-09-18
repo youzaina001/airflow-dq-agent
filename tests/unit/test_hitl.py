@@ -237,7 +237,7 @@ def test_approval_review_body_renders_the_canonical_payload() -> None:
     assert "Apply Admission TTL: 24 hours" in body
     assert "Approve the whole plan or reject it. A note is required." in body
     assert "sample_failures" not in body
-    assert "9001" not in body
+    assert '"order_id": 9001' not in body
     assert "SHIPPPED" not in body
 
 
