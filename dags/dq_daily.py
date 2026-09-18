@@ -94,9 +94,7 @@ def dq_daily() -> None:
         plan = compile_remediation_plan(
             report,
             proposal,
-            target_sets=PostgresTargetSetResolver(
-                engine=make_engine(resolve_read_dsn())
-            ),
+            target_sets=PostgresTargetSetResolver(engine=make_engine(resolve_read_dsn())),
         )
         event = plan_event(plan, str(candidate_data["candidate_event_id"]))
         append_event(event)

@@ -139,7 +139,7 @@ def sample_failing_rows(
         with engine.connect() as connection:
             result = connection.execute(text(spec.sample_sql), {"limit": limit})
             return [dict(row) for row in result.mappings()]
-    except SQLAlchemyError:
+    except (SQLAlchemyError, ValueError):
         raise_read_connection_failed()
 
 
@@ -152,7 +152,7 @@ def get_observed_schema(table: str, *, dsn: str | None = None) -> dict[str, str]
             str(column["name"]): str(column["type"])
             for column in inspector.get_columns(contract.table, schema=contract.schema_name)
         }
-    except SQLAlchemyError:
+    except (SQLAlchemyError, ValueError):
         raise_read_connection_failed()
 
 

@@ -31,9 +31,7 @@ def test_restricted_reader_can_perform_supported_reads_and_cannot_write(
     with admin.begin() as connection:
         connection.execute(text(f"DROP ROLE IF EXISTS {READER_ROLE}"))
         connection.execute(
-            text(
-                f"CREATE ROLE {READER_ROLE} LOGIN PASSWORD '{READER_PASSWORD}' IN ROLE dq_read"
-            )
+            text(f"CREATE ROLE {READER_ROLE} LOGIN PASSWORD '{READER_PASSWORD}' IN ROLE dq_read")
         )
     read_dsn = (
         make_url(warehouse_dsn)

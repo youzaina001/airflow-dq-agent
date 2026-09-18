@@ -220,7 +220,7 @@ def run_quality_suite(dsn: str | None = None) -> QualitySuiteReport:
     try:
         engine = make_engine(resolve_read_dsn(dsn))
         frames = load_frames(engine)
-    except SQLAlchemyError:
+    except (SQLAlchemyError, ValueError):
         raise_read_connection_failed()
     report = run_suite_on_frames(frames)
     # In HITL mode this is a required Postgres audit write; shadow mode retains the

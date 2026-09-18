@@ -242,3 +242,19 @@ def test_make_engine_without_override_keeps_warehouse_credentials(
     assert rendered == WAREHOUSE_DSN
     assert READ_DSN not in rendered
     assert APPLY_DSN not in rendered
+
+
+@pytest.mark.parametrize("operation", ["suite", "samples", "schema"])
+def test_malformed_read_dsn_has_controlled_error(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "READ_DSN", "postgresql+psycopg://reader:password@localhost:private-port/warehouse"
+    )
+    with pytest.raises(RuntimeError, match=r"^Read connection failed$"):
+        if operation == "suite":
+            run_quality_suite()
+        elif operation == "samples":
+            sample_failing_rows(SAMPLE_CHECK_ID)
+        else:
+            get_observed_schema(OBSERVED_TABLE)
