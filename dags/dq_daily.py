@@ -32,6 +32,8 @@ from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candi
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
 
+# Synthetic warehouse. Adopters replace this with register_external_invoice()
+# (see examples/dq_external_invoice.py) instead of depending on the demo catalog.
 register_demo()
 settings = get_settings()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:

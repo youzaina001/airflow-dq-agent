@@ -141,6 +141,52 @@ Point `dq_daily` at the same registration before the suite task runs (the bundle
 DAG calls `register_demo()` for the synthetic warehouse). Keep `APPLY_MODE=off`
 until a passing plan should request approval.
 
+## External invoice example (restricted credentials)
+
+The packaged example registers one external PostgreSQL table (`ext_invoice`) with a
+single-column primary key and one completeness Check Policy that permits
+`quarantine_nulls`. It uses `LLM_MODE=stub`: no model credentials and no language-model
+calls. Approval copies the authorized Remediation Target Set into
+`dq.quarantine_rows`. Source rows remain unchanged; success is a quarantine copy, not
+source repair.
+
+1. Install as above (`pip install -e ".[dev]"` from a checkout).
+2. Apply the packaged governance schema (dq traces, quarantine table, capability roles)
+   and seed the example table. YAML equivalent: `examples/my_warehouse.yaml`.
+
+```python
+from airflow_dq_agent.adoption import (
+    apply_governance_schema,
+    provision_restricted_logins,
+    register_external_invoice,
+    seed_external_invoice,
+)
+
+register_external_invoice()
+apply_governance_schema(owner_dsn)
+seed_external_invoice(owner_dsn)
+credentials = provision_restricted_logins(owner_dsn)
+```
+
+3. Create distinct LOGIN roles (or call `provision_restricted_logins`) so `READ_DSN`
+   inherits `dq_read`, `AUDIT_DSN` inherits `dq_audit`, and `APPLY_DSN` inherits
+   `dq_apply`. The reader cannot write; the apply account cannot UPDATE/DELETE source
+   rows or rewrite `dq.traces`.
+4. Copy [`examples/dq_external_invoice.py`](examples/dq_external_invoice.py) into
+   `dags/` (or replace `register_demo()` in `dags/dq_daily.py` with
+   `register_external_invoice()`). The example DAG binds the suite and compiler to
+   `READ_DSN`, HITL/Audit Lineage to `AUDIT_DSN`, and apply to `APPLY_DSN`.
+5. Keep `LLM_MODE=stub`. Leave `APPLY_MODE=off` until you intend a Human Decision.
+   Then set `APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed
+   `HITL_APPROVER_IDS` identity. Unpause the DAG, review the evaluated Remediation
+   Plan in Airflow, and approve with a non-empty note.
+6. Inspect `dq.quarantine_rows.pk_json` for the authorized invoice ids and confirm
+   `warehouse.ext_invoice` is unchanged. Audit Lineage on `dq.traces` connects the
+   quality report, Remediation Plan, evaluation, Human Decision, and apply result.
+
+Rejection and timeout are out of scope for this example. Do not treat a skipped
+Postgres or Airflow run as acceptance.
+
 ## Quick start
 
 The database-free path requires Python 3.12 or later and Make:
@@ -233,7 +279,7 @@ src/airflow_dq_agent/
   load.py                # YAML registry loader
 dags/dq_daily.py         # Airflow TaskFlow orchestration and HITL boundary
 evals/cases/             # portable deterministic evaluation cases
-examples/                # adopter YAML example
+examples/                # adopter YAML, external-invoice DAG, and registration example
 ```
 
 The scope is detection, typed proposals, deterministic evaluation, audited approval,
