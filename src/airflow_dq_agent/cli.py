@@ -154,21 +154,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return command_demo(args.no_db)
     try:
         report = _report(args.no_db)
+        _print_suite_outcome(report)
+        if args.command == "suite":
+            _print_json(sample_free_report(report))
+            return _quality_exit(report)
+        agent_run = run_proposal_agent(report)
+        if args.command == "propose":
+            _print_json(agent_run)
+            return _quality_exit(report)
+        evaluation = evaluate_proposal(report, agent_run.proposal)
+        _print_json(evaluation)
+        return _quality_exit(report, evaluation_blocked=not evaluation.passed)
     except Exception:
-        print("suite: incomplete: setup or execution error")
+        print("command: incomplete: setup or execution error")
         print("next: correct check execution or configuration; do not review a remediation plan")
         return 2
-    _print_suite_outcome(report)
-    if args.command == "suite":
-        _print_json(sample_free_report(report))
-        return _quality_exit(report)
-    agent_run = run_proposal_agent(report)
-    if args.command == "propose":
-        _print_json(agent_run)
-        return _quality_exit(report)
-    evaluation = evaluate_proposal(report, agent_run.proposal)
-    _print_json(evaluation)
-    return _quality_exit(report, evaluation_blocked=not evaluation.passed)
 
 
 if __name__ == "__main__":

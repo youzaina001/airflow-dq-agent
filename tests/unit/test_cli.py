@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from airflow_dq_agent.cli import build_parser, main
@@ -108,3 +110,21 @@ def test_suite_propose_eval_exits_distinguish_completed_and_incomplete(
     demo_out = capsys.readouterr().out.lower()
     assert "error" in demo_out
     assert "next:" in demo_out
+
+
+@pytest.mark.parametrize("command", ["propose", "eval"])
+def test_proposal_setup_error_returns_controlled_exit(
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("LLM_MODE", "replay")
+    monkeypatch.setenv("REPLAY_TRACE_PATH", str(tmp_path / "secret-source-missing.json"))
+
+    assert main([command, "--no-db"]) == 2
+
+    output = capsys.readouterr().out
+    assert "setup or execution error" in output
+    assert "secret-source" not in output
+    assert "do not review a remediation plan" in output
