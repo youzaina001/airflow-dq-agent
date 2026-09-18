@@ -6,9 +6,17 @@ from psycopg.errors import UndefinedTable, UniqueViolation
 from sqlalchemy.exc import ProgrammingError
 
 from airflow_dq_agent.action_definitions import get_governed_action
-from airflow_dq_agent.contracts import CandidateAction, Proposal, QualityEvidence, TargetSet
+from airflow_dq_agent.contracts import (
+    CandidateAction,
+    CheckResult,
+    Proposal,
+    QualityEvidence,
+    QualitySuiteReport,
+    TargetSet,
+)
 from airflow_dq_agent.contracts.models import CheckStatus
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
+from airflow_dq_agent.demo import green_report, seeded_failure_report
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.quality import run_suite_on_frames
 from airflow_dq_agent.quality.registry import CHECK_SPECS, CheckSpec, get_check_spec
@@ -343,3 +351,60 @@ def test_load_frames_still_raises_other_database_errors(monkeypatch: pytest.Monk
     monkeypatch.setattr(pl, "read_database", fake_read)
     with pytest.raises(ProgrammingError, match="duplicate key"):
         load_frames(_StubEngine())  # type: ignore[arg-type]
+
+
+def test_empty_and_all_error_suites_are_not_all_pass() -> None:
+    empty = QualitySuiteReport(checks=[], observed_columns={})
+    assert empty.passed_count == 0
+    assert empty.failed_count == 0
+    assert empty.error_count == 0
+    assert empty.incomplete is True
+    assert "all checks passed" not in empty.outcome_summary().lower()
+
+    spec = get_check_spec("fact_orders.total_amount.completeness")
+    errored = CheckResult(
+        check_id=spec.check_id,
+        table=spec.table,
+        column=spec.column,
+        dimension=spec.dimension,
+        status=CheckStatus.ERROR,
+        n_failed=0,
+        n_total=0,
+        message=f"cannot evaluate {spec.check_id}: missing column total_amount",
+        contract_id=spec.contract_id,
+        predicate=spec.description,
+    )
+    all_error = QualitySuiteReport(checks=[errored], observed_columns={})
+    assert all_error.passed_count == 0
+    assert all_error.failed_count == 0
+    assert all_error.error_count == 1
+    assert all_error.incomplete is True
+    assert "all checks passed" not in all_error.outcome_summary().lower()
+
+    mixed_frames = _contracted_frames()
+    mixed_frames["fact_orders"] = mixed_frames["fact_orders"].drop("total_amount")
+    mixed = run_suite_on_frames(mixed_frames)
+    assert mixed.error_count >= 1
+    assert mixed.failed_count >= 1
+    assert mixed.passed_count >= 1
+    assert mixed.incomplete is True
+    assert mixed.outcome_summary() != empty.outcome_summary()
+    assert mixed.outcome_summary() != all_error.outcome_summary()
+
+    failed = seeded_failure_report()
+    passed = green_report()
+    assert failed.failed_count >= 1
+    assert failed.error_count == 0
+    assert failed.incomplete is False
+    assert passed.failed_count == 0
+    assert passed.error_count == 0
+    assert passed.incomplete is False
+    assert "all checks passed" in passed.outcome_summary().lower()
+    summaries = {
+        empty.outcome_summary(),
+        all_error.outcome_summary(),
+        mixed.outcome_summary(),
+        failed.outcome_summary(),
+        passed.outcome_summary(),
+    }
+    assert len(summaries) == 5

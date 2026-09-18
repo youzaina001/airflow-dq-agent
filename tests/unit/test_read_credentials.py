@@ -107,34 +107,41 @@ def test_quality_suite_uses_warehouse_only_when_no_read_override_or_setting(
 
 def test_cli_suite_uses_configured_read_dsn(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _configure_credentials(monkeypatch)
     seen = _capture_engine(monkeypatch, SUITE_ENGINE)
 
-    with pytest.raises(RuntimeError, match="engine-probe"):
-        main(["suite"])
+    assert main(["suite"]) == 2
 
     assert seen == [READ_DSN]
     assert WAREHOUSE_DSN not in seen
     assert APPLY_DSN not in seen
+    output = capsys.readouterr().out.lower()
+    assert "setup or execution error" in output
+    assert "read-secret" not in output
 
 
 def test_cli_suite_uses_warehouse_only_when_no_read_setting(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.delenv("READ_DSN", raising=False)
     monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
     monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
     seen = _capture_engine(monkeypatch, SUITE_ENGINE)
 
-    with pytest.raises(RuntimeError, match="engine-probe"):
-        main(["suite"])
+    assert main(["suite"]) == 2
 
     assert seen == [WAREHOUSE_DSN]
+    output = capsys.readouterr().out.lower()
+    assert "setup or execution error" in output
+    assert "wh-secret" not in output
 
 
 def test_cli_suite_read_failure_stops_without_leaking_credentials(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     secret = "s3cret-password"
     user = "ci-reader"
@@ -143,10 +150,11 @@ def test_cli_suite_read_failure_stops_without_leaking_credentials(
     monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
     monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
 
-    with pytest.raises(RuntimeError, match=r"^Read connection failed$") as excinfo:
-        main(["suite"])
+    assert main(["suite"]) == 2
 
-    _assert_no_credential_leak(excinfo.value, secret=secret, user=user, dsn=bad_dsn)
+    output = capsys.readouterr().out
+    assert "setup or execution error" in output.lower()
+    _assert_no_credential_leak(output, secret=secret, user=user, dsn=bad_dsn)
 
 
 def test_sample_failing_rows_uses_configured_read_dsn(
@@ -245,16 +253,21 @@ def test_sample_and_schema_read_failure_does_not_fall_back_to_warehouse_or_apply
     assert APPLY_DSN not in seen
 
 
-def _assert_no_credential_leak(exc: BaseException, *, secret: str, user: str, dsn: str) -> None:
-    parts = [str(exc), repr(exc)]
-    current: BaseException | None = exc
-    seen_ids: set[int] = set()
-    while current is not None and id(current) not in seen_ids:
-        seen_ids.add(id(current))
-        parts.append(str(current))
-        parts.append(repr(current))
-        current = current.__cause__ or current.__context__
-    text = "\n".join(parts)
+def _assert_no_credential_leak(
+    payload: BaseException | str, *, secret: str, user: str, dsn: str
+) -> None:
+    if isinstance(payload, str):
+        text = payload
+    else:
+        parts = [str(payload), repr(payload)]
+        current: BaseException | None = payload
+        seen_ids: set[int] = set()
+        while current is not None and id(current) not in seen_ids:
+            seen_ids.add(id(current))
+            parts.append(str(current))
+            parts.append(repr(current))
+            current = current.__cause__ or current.__context__
+        text = "\n".join(parts)
     assert secret not in text
     assert user not in text
     assert dsn not in text
