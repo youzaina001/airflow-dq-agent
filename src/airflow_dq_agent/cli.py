@@ -97,6 +97,9 @@ def _quality_exit(report: QualitySuiteReport, *, evaluation_blocked: bool = Fals
 
 def command_demo(no_db: bool) -> int:
     report = _report(no_db)
+    if report.incomplete:
+        _print_suite_outcome(report)
+        return 2
     agent_run = run_proposal_agent(report)
     evaluation = evaluate_proposal(report, agent_run.proposal)
     trace = trace_agent_run(agent_run, report, evaluation)
@@ -129,7 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  eval: exit 0 completed all-pass with passing evaluation; "
             "exit 1 completed quality failure or blocked evaluation; "
             "exit 2 setup or incomplete-check errors.\n"
-            "  demo: exit 0 on a successful demonstration.\n"
+            "  demo: exit 0 on a successful demonstration; "
+            "exit 2 for setup or incomplete-check errors.\n"
             "  seed: exit 0 after recreating the warehouse."
         ),
     )
@@ -150,9 +154,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed_warehouse()
         print("seeded warehouse with deterministic quality defects")
         return 0
-    if args.command == "demo":
-        return command_demo(args.no_db)
     try:
+        if args.command == "demo":
+            return command_demo(args.no_db)
         report = _report(args.no_db)
         _print_suite_outcome(report)
         if args.command == "suite":

@@ -112,7 +112,7 @@ def test_suite_propose_eval_exits_distinguish_completed_and_incomplete(
     assert "next:" in demo_out
 
 
-@pytest.mark.parametrize("command", ["propose", "eval"])
+@pytest.mark.parametrize("command", ["propose", "eval", "demo"])
 def test_proposal_setup_error_returns_controlled_exit(
     command: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -127,4 +127,20 @@ def test_proposal_setup_error_returns_controlled_exit(
     output = capsys.readouterr().out
     assert "setup or execution error" in output
     assert "secret-source" not in output
+    assert "do not review a remediation plan" in output
+
+
+@pytest.mark.parametrize("report", [QualitySuiteReport(checks=[]), _error_report()])
+def test_demo_refuses_incomplete_checking(
+    report: QualitySuiteReport,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("LLM_MODE", "stub")
+    monkeypatch.setattr("airflow_dq_agent.cli._report", lambda _no_db: report)
+
+    assert main(["demo", "--no-db"]) == 2
+
+    output = capsys.readouterr().out
+    assert "incomplete" in output
     assert "do not review a remediation plan" in output
