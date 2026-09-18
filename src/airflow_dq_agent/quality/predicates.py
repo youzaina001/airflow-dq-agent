@@ -12,7 +12,6 @@ from airflow_dq_agent.contracts.models import Dimension
 from airflow_dq_agent.contracts.tables import get_table_contract
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_SCHEMA = "warehouse"
 
 
 class CheckView(Protocol):
@@ -81,15 +80,18 @@ def _in_list(values: Sequence[str]) -> str:
 
 
 def _qualified(table: str) -> str:
-    return f"{_SCHEMA}.{_ident(table)}"
+    contract = get_table_contract(table)
+    return f"{_ident(contract.schema_name)}.{_ident(contract.table)}"
 
 
 def sample_sql_for(spec: CheckView) -> str:
     table = spec.table
     if spec.dimension is Dimension.SCHEMA_DRIFT:
+        contract = get_table_contract(table)
         return (
             "SELECT column_name FROM information_schema.columns "
-            f"WHERE table_schema = {_sql_str(_SCHEMA)} AND table_name = {_sql_str(_ident(table))} "
+            f"WHERE table_schema = {_sql_str(_ident(contract.schema_name))} "
+            f"AND table_name = {_sql_str(_ident(contract.table))} "
             "ORDER BY ordinal_position LIMIT :limit"
         )
     pk = _primary_key(table)

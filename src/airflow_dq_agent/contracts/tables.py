@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 DType = Literal["int64", "float64", "utf8", "date", "datetime", "bool"]
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _require_ident(value: str) -> str:
+    if not _IDENT.fullmatch(value):
+        raise ValueError(f"invalid identifier {value!r}")
+    return value
 
 
 class ColumnContract(BaseModel):
@@ -16,6 +24,11 @@ class ColumnContract(BaseModel):
     unique: bool = False
     allowed_values: list[str] | None = None
     description: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def name_must_be_identifier(cls, value: str) -> str:
+        return _require_ident(value)
 
 
 class TableContract(BaseModel):
@@ -29,6 +42,26 @@ class TableContract(BaseModel):
         default_factory=list,
         description="(column, ref_table, ref_column)",
     )
+
+    @field_validator("table", "schema_name")
+    @classmethod
+    def names_must_be_identifiers(cls, value: str) -> str:
+        return _require_ident(value)
+
+    @field_validator("primary_key")
+    @classmethod
+    def primary_key_must_be_identifiers(cls, value: list[str]) -> list[str]:
+        return [_require_ident(item) for item in value]
+
+    @field_validator("foreign_keys")
+    @classmethod
+    def foreign_keys_must_be_identifiers(
+        cls, value: list[tuple[str, str, str]]
+    ) -> list[tuple[str, str, str]]:
+        return [
+            (_require_ident(column), _require_ident(ref_table), _require_ident(ref_column))
+            for column, ref_table, ref_column in value
+        ]
 
     @property
     def contract_id(self) -> str:
