@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel
 
-from airflow_dq_agent.agent.runner import run_proposal_agent
+from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
     EvalReport,
@@ -101,7 +101,11 @@ def command_demo(no_db: bool) -> int:
         _print_suite_outcome(report)
         return 2
     agent_run = run_proposal_agent(report)
-    evaluation = evaluate_proposal(report, agent_run.proposal)
+    # Durable JSONL/Postgres audit is the same privacy boundary as DAG XCom:
+    # reconstruct authority-only identifiers before evaluation and tracing.
+    proposal = Proposal.model_validate(safe_proposal_for_xcom(report, agent_run.proposal))
+    agent_run = agent_run.model_copy(update={"proposal": proposal})
+    evaluation = evaluate_proposal(report, proposal)
     trace = trace_agent_run(agent_run, report, evaluation)
     _print_suite_outcome(report)
     print(
