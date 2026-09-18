@@ -85,11 +85,11 @@ def _is_undefined_table(exc: BaseException) -> bool:
 
 def load_frames(engine: Engine) -> dict[str, pl.DataFrame]:
     frames: dict[str, pl.DataFrame] = {}
-    for table in TABLE_CONTRACTS:
+    for table, contract in TABLE_CONTRACTS.items():
         with engine.connect() as conn:
             try:
                 frames[table] = pl.read_database(
-                    f"SELECT * FROM warehouse.{table}",
+                    f"SELECT * FROM {contract.qualified}",
                     connection=conn,
                 )
             except Exception as exc:
