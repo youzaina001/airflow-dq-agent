@@ -82,7 +82,7 @@ def quality_report_event(report: QualitySuiteReport) -> AuditEvent:
 def candidate_proposal_event(
     report: QualitySuiteReport, proposal: Proposal, predecessor: AuditEvent | str
 ) -> AuditEvent:
-    candidate_fingerprint = proposal.fingerprint or canonical_fingerprint(proposal)
+    candidate_fingerprint = canonical_fingerprint(proposal.model_copy(update={"fingerprint": None}))
     return _event(
         "candidate_proposal",
         quality_run_id=report.run_id,
