@@ -61,12 +61,12 @@ compose-smoke:
 	bash scripts/compose-smoke.sh
 
 lint:
-	$(PYTHON) -m ruff check src tests dags
-	$(PYTHON) -m ruff format --check src tests dags
+	$(PYTHON) -m ruff check src tests dags examples
+	$(PYTHON) -m ruff format --check src tests dags examples
 
 fmt:
-	$(PYTHON) -m ruff check --fix src tests dags
-	$(PYTHON) -m ruff format src tests dags
+	$(PYTHON) -m ruff check --fix src tests dags examples
+	$(PYTHON) -m ruff format src tests dags examples
 
 format: fmt
 

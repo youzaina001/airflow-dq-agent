@@ -1,4 +1,13 @@
-"""Daily governed DQ flow: report → candidate → plan → eval → audited HITL → apply."""
+"""Adapted dq_daily: external invoice table, stub proposer, restricted DSN apply.
+
+Copy this file into `dags/` (or replace `register_demo()` in `dags/dq_daily.py`).
+Success is a quarantine copy of the authorized Remediation Target Set; source
+rows remain unchanged. This is not source repair.
+
+Safe defaults remain LLM_MODE=stub and APPLY_MODE=off. Set APPLY_MODE=hitl,
+TRACE_POSTGRES=true, and distinct READ_DSN / AUDIT_DSN / APPLY_DSN only when a
+human should approve quarantine copies through Airflow.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +17,7 @@ from typing import Any
 from airflow.exceptions import AirflowSkipException
 from airflow.sdk import dag, task
 
+from airflow_dq_agent.adoption import register_external_invoice
 from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
 from airflow_dq_agent.airflow_hitl import AuditedApprovalOperator
 from airflow_dq_agent.apply import apply_plan
@@ -20,7 +30,6 @@ from airflow_dq_agent.contracts import (
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.demo import register_demo
 from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.planning.admission import create_apply_admission
@@ -32,23 +41,21 @@ from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candi
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
 
-# Synthetic warehouse. Adopters replace this with register_external_invoice()
-# (see examples/dq_external_invoice.py) instead of depending on the demo catalog.
-register_demo()
+register_external_invoice()
 settings = get_settings()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
     raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")
 
 
 @dag(
-    dag_id="dq_daily",
+    dag_id="dq_external_invoice",
     schedule="@daily",
     start_date=datetime(2025, 1, 1),
     catchup=False,
     is_paused_upon_creation=True,
-    tags=["data-quality", "governed-ai"],
+    tags=["data-quality", "governed-ai", "adopter-example"],
 )
-def dq_daily() -> None:
+def dq_external_invoice() -> None:
     @task
     def run_suite_task() -> dict[str, Any]:
         # XCom is durable storage, like JSONL and Postgres audit lineage. The
@@ -60,9 +67,6 @@ def dq_daily() -> None:
     def propose_task(report_data: dict[str, Any]) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
         verify_report_integrity(report, refusing="proposal")
-        # The raw model result and any bounded tool samples remain transient inside
-        # this task. Only canonical authority identifiers and controlled text are
-        # reconstructed for the durable XCom return value.
         return safe_proposal_for_xcom(report, run_proposal_agent(report).proposal)
 
     @task
@@ -189,7 +193,6 @@ def dq_daily() -> None:
         approval = AuditedApprovalOperator(
             task_id="approve_remediation_plan",
             subject="Approve governed DQ remediation plan",
-            # HITL body is a string; the sample-free review is rendered upstream.
             body="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review_body'] }}",
             quality_run_id="{{ ti.xcom_pull(task_ids='run_suite_task')['run_id'] }}",
             predecessor_event_id=(
@@ -227,4 +230,4 @@ def dq_daily() -> None:
         apply_after_admission_task(report, evaluated, admission)
 
 
-dq_daily()
+dq_external_invoice()

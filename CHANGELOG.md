@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Packaged external-invoice adopter example: `register_external_invoice`,
+  restricted read/audit/apply login provisioning, and
+  `examples/dq_external_invoice.py` for Airflow quarantine copies.
+
 ## 0.2.0 - 2026-09-06
 
 ### Added

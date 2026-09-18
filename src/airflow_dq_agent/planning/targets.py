@@ -53,7 +53,9 @@ class PostgresTargetSetResolver:
         )
         target_sql = rendered.target_sql
         if target_sql is not None:
-            target_sql = f"{target_sql} FOR UPDATE OF t"
+            # FOR UPDATE requires UPDATE on the source; dq_apply is SELECT-only there.
+            # FOR SHARE plus SERIALIZABLE isolation still freezes the admitted target set.
+            target_sql = f"{target_sql} FOR SHARE OF t"
         return self._select(connection, target_sql, rendered.target_params, item.table)
 
     def resolve_item(self, connection: Connection, item: ExecutablePlanItem) -> TargetSet:
