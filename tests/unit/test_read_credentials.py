@@ -17,6 +17,8 @@ from airflow_dq_agent.agent.runner import (
     get_observed_schema,
     sample_failing_rows,
 )
+from airflow_dq_agent.cli import main
+from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.quality.suite import run_quality_suite
 from airflow_dq_agent.warehouse.db import make_engine
@@ -26,6 +28,7 @@ DAG_PATH = Path(__file__).resolve().parents[2] / "dags" / "dq_daily.py"
 READ_DSN = "postgresql+psycopg://reader:read-secret@read-host:65432/warehouse"
 WAREHOUSE_DSN = "postgresql+psycopg://warehouse:wh-secret@wh-host:5433/warehouse"
 APPLY_DSN = "postgresql+psycopg://applier:ap-secret@ap-host:5433/warehouse"
+AUDIT_DSN = "postgresql+psycopg://audit:au-secret@au-host:5433/warehouse"
 OVERRIDE_DSN = "postgresql+psycopg://override:ov-secret@ov-host:65432/warehouse"
 SAMPLE_CHECK_ID = "fact_orders.total_amount.completeness"
 OBSERVED_TABLE = "dim_customer"
@@ -37,6 +40,20 @@ def _configure_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("READ_DSN", READ_DSN)
     monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
     monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
+
+
+def test_runtime_settings_keep_read_warehouse_apply_and_audit_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_credentials(monkeypatch)
+    monkeypatch.setenv("AUDIT_DSN", AUDIT_DSN)
+
+    settings = get_settings()
+
+    assert settings.read_dsn == READ_DSN
+    assert settings.warehouse_dsn == WAREHOUSE_DSN
+    assert settings.apply_dsn == APPLY_DSN
+    assert settings.audit_dsn == AUDIT_DSN
 
 
 def _capture_engine(monkeypatch: pytest.MonkeyPatch, target: str) -> list[str | None]:
@@ -86,6 +103,50 @@ def test_quality_suite_uses_warehouse_only_when_no_read_override_or_setting(
         run_quality_suite()
 
     assert seen == [WAREHOUSE_DSN]
+
+
+def test_cli_suite_uses_configured_read_dsn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_credentials(monkeypatch)
+    seen = _capture_engine(monkeypatch, SUITE_ENGINE)
+
+    with pytest.raises(RuntimeError, match="engine-probe"):
+        main(["suite"])
+
+    assert seen == [READ_DSN]
+    assert WAREHOUSE_DSN not in seen
+    assert APPLY_DSN not in seen
+
+
+def test_cli_suite_uses_warehouse_only_when_no_read_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("READ_DSN", raising=False)
+    monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
+    monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
+    seen = _capture_engine(monkeypatch, SUITE_ENGINE)
+
+    with pytest.raises(RuntimeError, match="engine-probe"):
+        main(["suite"])
+
+    assert seen == [WAREHOUSE_DSN]
+
+
+def test_cli_suite_read_failure_stops_without_leaking_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "s3cret-password"
+    user = "ci-reader"
+    bad_dsn = f"postgresql+psycopg://{user}:{secret}@127.0.0.1:1/warehouse"
+    monkeypatch.setenv("READ_DSN", bad_dsn)
+    monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
+    monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
+
+    with pytest.raises(RuntimeError, match=r"^Read connection failed$") as excinfo:
+        main(["suite"])
+
+    _assert_no_credential_leak(excinfo.value, secret=secret, user=user, dsn=bad_dsn)
 
 
 def test_sample_failing_rows_uses_configured_read_dsn(
@@ -176,8 +237,10 @@ def test_sample_and_schema_read_failure_does_not_fall_back_to_warehouse_or_apply
         get_observed_schema(OBSERVED_TABLE)
     with pytest.raises(RuntimeError):
         _sample_failing_rows_tool(SAMPLE_CHECK_ID)
+    with pytest.raises(RuntimeError):
+        _get_observed_schema_tool(OBSERVED_TABLE)
 
-    assert seen == [READ_DSN, READ_DSN, READ_DSN]
+    assert seen == [READ_DSN, READ_DSN, READ_DSN, READ_DSN]
     assert WAREHOUSE_DSN not in seen
     assert APPLY_DSN not in seen
 
@@ -242,6 +305,25 @@ def test_get_observed_schema_read_failure_does_not_expose_dsn_or_credential(
         get_observed_schema(OBSERVED_TABLE)
 
     _assert_no_credential_leak(excinfo.value, secret=secret, user=user, dsn=bad_dsn)
+
+
+def test_live_proposer_read_tools_read_failure_does_not_expose_dsn_or_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "s3cret-password"
+    user = "ci-reader"
+    bad_dsn = f"postgresql+psycopg://{user}:{secret}@127.0.0.1:1/warehouse"
+    monkeypatch.setenv("READ_DSN", bad_dsn)
+    monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
+    monkeypatch.setenv("APPLY_DSN", APPLY_DSN)
+
+    with pytest.raises(RuntimeError, match=r"^Read connection failed$") as sample_exc:
+        _sample_failing_rows_tool(SAMPLE_CHECK_ID)
+    with pytest.raises(RuntimeError, match=r"^Read connection failed$") as schema_exc:
+        _get_observed_schema_tool(OBSERVED_TABLE)
+
+    _assert_no_credential_leak(sample_exc.value, secret=secret, user=user, dsn=bad_dsn)
+    _assert_no_credential_leak(schema_exc.value, secret=secret, user=user, dsn=bad_dsn)
 
 
 def test_make_engine_without_override_keeps_warehouse_credentials(
@@ -369,3 +451,27 @@ def test_dag_suite_uses_bound_settings_not_stale_process_env(
     tasks["run_suite_task"]()
 
     assert seen == [OVERRIDE_DSN]
+
+
+def test_dag_suite_uses_bound_read_dsn_not_process_env_or_warehouse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, tasks = _load_dag_tasks(monkeypatch)
+    process_read = "postgresql+psycopg://process-reader:process-secret@process-host:1/warehouse"
+    monkeypatch.setenv("READ_DSN", process_read)
+    monkeypatch.setenv("WAREHOUSE_DSN", WAREHOUSE_DSN)
+    seen: list[str | None] = []
+
+    def fake_suite(dsn: str | None = None):
+        seen.append(dsn)
+        return seeded_failure_report()
+
+    module.settings = module.settings.model_copy(
+        update={"warehouse_dsn": WAREHOUSE_DSN, "read_dsn": OVERRIDE_DSN}
+    )
+    monkeypatch.setattr(module, "run_quality_suite", fake_suite)
+    tasks["run_suite_task"]()
+
+    assert seen == [OVERRIDE_DSN]
+    assert process_read not in seen
+    assert WAREHOUSE_DSN not in seen
