@@ -106,7 +106,7 @@ def test_restricted_login_dsn_keeps_warehouse_identity_without_secrets() -> None
     assert "secret" not in warehouse_environment_id(read)
 
 
-def test_apply_lock_is_usable_with_select_only_apply_role() -> None:
+def test_apply_target_recheck_does_not_require_row_lock_privilege() -> None:
     item = ExecutablePlanItem(
         item_id="lock-share",
         action_id="quarantine_nulls",
@@ -134,8 +134,9 @@ def test_apply_lock_is_usable_with_select_only_apply_role() -> None:
     ).lock_and_resolve(_Connection(), item)  # type: ignore[arg-type]
 
     assert recorded
-    sql = recorded[0]
-    assert "FOR SHARE OF t" in sql
+    sql = recorded[0].upper()
+    # PostgreSQL requires UPDATE to take FOR SHARE/FOR UPDATE; dq_apply is SELECT-only.
+    assert "FOR SHARE" not in sql
     assert "FOR UPDATE" not in sql
 
 
