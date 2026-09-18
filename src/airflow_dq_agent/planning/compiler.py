@@ -114,65 +114,77 @@ def compile_remediation_plan(
         if count > 1
     }
 
-    for index, requested in enumerate(candidate.candidate_actions):
-        evidence = list(requested.evidence)
-        if candidate_action_identity(requested) in duplicate_identities:
-            items.append(
-                _blocked_item(
-                    index=index,
-                    evidence=evidence,
-                    reason="duplicate candidate action and quality evidence",
+    if report.incomplete:
+        for index, requested in enumerate(candidate.candidate_actions):
+            evidence = list(requested.evidence)
+            if evidence:
+                items.append(
+                    _blocked_item(
+                        index=index,
+                        evidence=evidence,
+                        reason="quality suite is incomplete",
+                    )
                 )
-            )
-            covered.update(
-                entry.check_id for entry in evidence if entry.check_id in report_failures
-            )
-            continue
-        try:
-            justification = check_policy.justify_action(
-                action_id=requested.action_id,
-                evidence=requested.evidence,
-                report_failures=report_failures,
-            )
-            specs = justification.specs
-            if any(spec.table != specs[0].table for spec in specs):
-                raise ValueError("one plan item cannot target more than one contracted table")
-            target_set = target_sets.resolve(
-                report_run_id=report.run_id,
-                check_id=specs[0].check_id,
-                action_id=requested.action_id,
-                table=specs[0].table,
-                params=justification.params,
-            )
-            item = ExecutablePlanItem(
-                item_id=f"candidate-{index}",
-                action_id=requested.action_id,
-                table=specs[0].table,
-                params=justification.params,
-                evidence=tuple(evidence),
-                target_set=target_set,
-                policy_fingerprint=_policy_fingerprint(specs, requested.action_id),
-            )
-            items.append(item)
-            covered.update(entry.check_id for entry in evidence)
-        except (KeyError, ValueError):
-            items.append(
-                _blocked_item(
-                    index=index,
-                    evidence=evidence,
-                    reason="candidate action is unavailable under the controlled policy",
+    else:
+        for index, requested in enumerate(candidate.candidate_actions):
+            evidence = list(requested.evidence)
+            if candidate_action_identity(requested) in duplicate_identities:
+                items.append(
+                    _blocked_item(
+                        index=index,
+                        evidence=evidence,
+                        reason="duplicate candidate action and quality evidence",
+                    )
                 )
-            )
-            covered.update(
-                entry.check_id for entry in evidence if entry.check_id in report_failures
-            )
+                covered.update(
+                    entry.check_id for entry in evidence if entry.check_id in report_failures
+                )
+                continue
+            try:
+                justification = check_policy.justify_action(
+                    action_id=requested.action_id,
+                    evidence=requested.evidence,
+                    report_failures=report_failures,
+                )
+                specs = justification.specs
+                if any(spec.table != specs[0].table for spec in specs):
+                    raise ValueError("one plan item cannot target more than one contracted table")
+                target_set = target_sets.resolve(
+                    report_run_id=report.run_id,
+                    check_id=specs[0].check_id,
+                    action_id=requested.action_id,
+                    table=specs[0].table,
+                    params=justification.params,
+                )
+                item = ExecutablePlanItem(
+                    item_id=f"candidate-{index}",
+                    action_id=requested.action_id,
+                    table=specs[0].table,
+                    params=justification.params,
+                    evidence=tuple(evidence),
+                    target_set=target_set,
+                    policy_fingerprint=_policy_fingerprint(specs, requested.action_id),
+                )
+                items.append(item)
+                covered.update(entry.check_id for entry in evidence)
+            except (KeyError, ValueError):
+                items.append(
+                    _blocked_item(
+                        index=index,
+                        evidence=evidence,
+                        reason="candidate action is unavailable under the controlled policy",
+                    )
+                )
+                covered.update(
+                    entry.check_id for entry in evidence if entry.check_id in report_failures
+                )
 
     omitted = [
         QualityEvidence(check_id=check_id, contract_id=failed.contract_id)
         for check_id, failed in report_failures.items()
         if check_id not in covered
     ]
-    if omitted:
+    if omitted and not report.incomplete:
         items.append(
             NonExecutablePlanItem(
                 item_id="omitted-failures",
@@ -181,6 +193,8 @@ def compile_remediation_plan(
             )
         )
     blocked_reasons = [item.reason for item in items if isinstance(item, NonExecutablePlanItem)]
+    if report.incomplete:
+        blocked_reasons.append("quality suite is incomplete")
     policy_fingerprint = canonical_fingerprint(
         [item.policy_fingerprint for item in items if isinstance(item, ExecutablePlanItem)]
     )

@@ -109,6 +109,28 @@ class QualitySuiteReport(BaseModel):
         return sum(1 for c in self.checks if c.status == CheckStatus.PASS)
 
     @property
+    def error_count(self) -> int:
+        return sum(1 for c in self.checks if c.status == CheckStatus.ERROR)
+
+    @property
+    def incomplete(self) -> bool:
+        return not self.checks or self.error_count > 0
+
+    def outcome_summary(self) -> str:
+        error_word = "error" if self.error_count == 1 else "errors"
+        counts = (
+            f"{self.passed_count} passed, {self.failed_count} failed, "
+            f"{self.error_count} {error_word}"
+        )
+        if not self.checks:
+            return f"incomplete: {counts}; no checks ran"
+        if self.incomplete:
+            return f"incomplete: {counts}"
+        if self.failed_count:
+            return f"completed: {counts}"
+        return f"completed: {counts}; all checks passed"
+
+    @property
     def check_ids(self) -> set[str]:
         return {c.check_id for c in self.checks}
 

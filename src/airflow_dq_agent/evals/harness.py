@@ -199,6 +199,15 @@ def evaluate_proposal(
             _allowlist_score(parsed),
             _check_policy_score(report, parsed),
         ]
+    if report.incomplete:
+        scores.append(
+            _score(
+                "suite_completeness",
+                0.0,
+                1.0,
+                "The quality suite is incomplete; do not compile or admit a remediation.",
+            )
+        )
     blocked = [f"{score.name}: {score.rationale}" for score in scores if not score.passed]
     return EvalReport(
         passed=not blocked,

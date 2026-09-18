@@ -5,13 +5,18 @@ from airflow_dq_agent.contracts import (
     CandidateAction,
     CheckResult,
     ExecutablePlanItem,
+    HumanDecision,
     Proposal,
     QualityEvidence,
+    QualitySuiteReport,
     TargetSet,
 )
+from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import CheckStatus
 from airflow_dq_agent.demo import seeded_failure_report
+from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
 from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.integrity import plan_payload_fingerprint, verify_executable_params
 from airflow_dq_agent.quality.registry import get_check_spec
 
@@ -150,6 +155,83 @@ def test_compiler_does_not_treat_error_status_as_executable_evidence() -> None:
     assert plan.blocked is True
     assert plan.items[0].kind == "non_executable"
     assert not any(item.kind == "executable" for item in plan.items)
+
+
+def test_incomplete_suite_cannot_become_apply_ready() -> None:
+    failed = seeded_failure_report().get("fact_orders.total_amount.completeness")
+    assert failed is not None
+    errored = failed.model_copy(
+        update={"status": CheckStatus.ERROR, "n_failed": 0, "sample_failures": []}
+    )
+    candidate = Proposal(
+        summary="Quarantine rows from a completed completeness failure.",
+        root_cause_hypothesis="A required total was omitted.",
+        candidate_actions=[
+            CandidateAction(
+                action_id="quarantine_nulls",
+                evidence=[
+                    QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                ],
+                rationale="Preserve source rows for review.",
+            )
+        ],
+        confidence=0.9,
+    )
+
+    completed = seeded_failure_report().model_copy(update={"checks": [failed]})
+    completed_plan = compile_remediation_plan(completed, candidate, target_sets=_TargetSets())
+    assert completed.incomplete is False
+    assert completed_plan.blocked is False
+    assert evaluate_plan(completed_plan).passed is True
+
+    empty = QualitySuiteReport(checks=[], observed_columns={})
+    empty = empty.model_copy(update={"fingerprint": report_payload_fingerprint(empty)})
+    empty_plan = compile_remediation_plan(
+        empty,
+        Proposal(
+            summary="No checks ran.",
+            root_cause_hypothesis="The suite was empty.",
+            candidate_actions=[],
+            confidence=0.1,
+        ),
+        target_sets=_TargetSets(),
+    )
+    assert empty.incomplete is True
+    assert empty_plan.blocked is True
+    assert evaluate_plan(empty_plan).passed is False
+    empty_eval = evaluate_proposal(
+        empty,
+        Proposal(
+            summary="No checks ran.",
+            root_cause_hypothesis="The suite was empty.",
+            candidate_actions=[],
+            confidence=0.1,
+        ),
+    )
+    assert empty_eval.passed is False
+    assert "PASS — compile this candidate." not in empty_eval.summary_markdown
+    with pytest.raises(PermissionError, match="blocked"):
+        create_apply_admission(
+            empty_plan,
+            evaluate_plan(empty_plan),
+            HumanDecision(decision="Approve", actor="approver-1"),
+            report=empty,
+        )
+
+    mixed = seeded_failure_report().model_copy(update={"checks": [failed, errored]})
+    mixed = mixed.model_copy(update={"fingerprint": report_payload_fingerprint(mixed)})
+    mixed_plan = compile_remediation_plan(mixed, candidate, target_sets=_TargetSets())
+    assert mixed.incomplete is True
+    assert mixed_plan.blocked is True
+    assert evaluate_plan(mixed_plan).passed is False
+    assert not any(item.kind == "executable" for item in mixed_plan.items)
+    with pytest.raises(PermissionError, match=r"blocked|incomplete"):
+        create_apply_admission(
+            mixed_plan,
+            evaluate_plan(mixed_plan),
+            HumanDecision(decision="Approve", actor="approver-1"),
+            report=mixed,
+        )
 
 
 def test_red_dim_product_uniqueness_does_not_block_executable_completeness() -> None:

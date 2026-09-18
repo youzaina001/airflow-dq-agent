@@ -22,6 +22,7 @@ from airflow_dq_agent.config import Settings, get_settings
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
     CheckResult,
+    CheckStatus,
     Proposal,
     QualityEvidence,
     QualitySuiteReport,
@@ -81,10 +82,33 @@ def build_prompt(report: QualitySuiteReport) -> str:
         }
         for check in report.failed_checks
     ]
-    return f"{SYSTEM_PROMPT}\nQuality report failures (authoritative):\n{json.dumps(failures, indent=2)}"
+    errors = [
+        {
+            "check_id": check.check_id,
+            "table": check.table,
+            "status": check.status.value,
+            "message": check.message,
+        }
+        for check in report.checks
+        if check.status is CheckStatus.ERROR
+    ]
+    header = report.outcome_summary()
+    return (
+        f"{SYSTEM_PROMPT}\nQuality suite outcome (authoritative): {header}\n"
+        f"Failed checks:\n{json.dumps(failures, indent=2)}\n"
+        f"Errored checks:\n{json.dumps(errors, indent=2)}"
+    )
 
 
 def _stub_proposal(report: QualitySuiteReport) -> Proposal:
+    if report.incomplete:
+        return Proposal(
+            summary=report.outcome_summary(),
+            root_cause_hypothesis="The quality suite did not complete every required check.",
+            candidate_actions=[],
+            do_not_apply_reasons=["incomplete quality suite"],
+            confidence=1.0,
+        )
     failures = report.failed_checks
     if not failures:
         return Proposal(
