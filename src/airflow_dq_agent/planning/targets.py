@@ -47,14 +47,16 @@ class PostgresTargetSetResolver:
             return self._select(connection, rendered.target_sql, rendered.target_params, table)
 
     def lock_and_resolve(self, connection: Connection, item: ExecutablePlanItem) -> TargetSet:
-        """Select and lock precisely the rows whose fingerprint must match admission."""
+        """Recheck the admitted target set inside the apply transaction.
+
+        PostgreSQL row locks (FOR UPDATE / FOR SHARE) require UPDATE on the
+        source table. dq_apply is SELECT-only there, so the apply transaction's
+        SERIALIZABLE isolation is what freezes the snapshot.
+        """
         rendered = get_governed_action(item.action_id).render(
             table=item.table, params=item.params, run_id="apply"
         )
-        target_sql = rendered.target_sql
-        if target_sql is not None:
-            target_sql = f"{target_sql} FOR UPDATE OF t"
-        return self._select(connection, target_sql, rendered.target_params, item.table)
+        return self._select(connection, rendered.target_sql, rendered.target_params, item.table)
 
     def resolve_item(self, connection: Connection, item: ExecutablePlanItem) -> TargetSet:
         """Recompute a target summary in a read-only dry-run transaction."""
