@@ -80,8 +80,23 @@ until docker compose exec -T airflow-scheduler airflow dags list 2>/dev/null | g
   sleep 5
 done
 
+api_curl() {
+  docker compose exec -T airflow-apiserver curl -sS "$@"
+}
+
+api_curl_code() {
+  # stdout: body; last line of fd captured separately via -w. Prints "BODY\nCODE".
+  docker compose exec -T airflow-apiserver curl -sS -w '\n%{http_code}' "$@"
+}
+
+split_body_code() {
+  local payload="$1"
+  HTTP_CODE="$(printf '%s' "$payload" | tail -n1)"
+  HTTP_BODY="$(printf '%s' "$payload" | sed '$d')"
+}
+
 api_ready_deadline=$((SECONDS + 180))
-until curl -sf "$API/api/v2/version" >/dev/null; do
+until api_curl -f "http://127.0.0.1:8080/api/v2/version" >/dev/null; do
   if ((SECONDS >= api_ready_deadline)); then
     echo "Airflow API was not ready" >&2
     docker compose logs --no-color --tail=80 airflow-apiserver >&2 || true
@@ -90,12 +105,27 @@ until curl -sf "$API/api/v2/version" >/dev/null; do
   sleep 3
 done
 
-token="$(
-  curl -sf -X POST "$API/auth/token" \
-    -H 'Content-Type: application/json' \
-    -d '{"username":"airflow","password":"airflow"}' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
-)"
+token=""
+token_deadline=$((SECONDS + 180))
+while ((SECONDS < token_deadline)); do
+  split_body_code "$(
+    api_curl_code -X POST "http://127.0.0.1:8080/auth/token" \
+      -H 'Content-Type: application/json' \
+      -d '{"username":"airflow","password":"airflow"}' || true
+  )"
+  if [[ "$HTTP_CODE" == "201" || "$HTTP_CODE" == "200" ]]; then
+    token="$(printf '%s' "$HTTP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+    break
+  fi
+  echo "Waiting for FAB /auth/token (HTTP ${HTTP_CODE:-none})" >&2
+  printf '%s\n' "$HTTP_BODY" >&2 || true
+  sleep 3
+done
+if [[ -z "$token" ]]; then
+  echo "Could not obtain Airflow JWT for user airflow" >&2
+  docker compose logs --no-color --tail=80 airflow-apiserver >&2 || true
+  exit 1
+fi
 auth_header="Authorization: Bearer $token"
 
 psql_wh() {
@@ -109,10 +139,10 @@ assert_zero_writes() {
   local copied
   copied="$(psql_wh "SELECT count(*) FROM dq.quarantine_rows WHERE table_name = 'warehouse.ext_invoice'")"
   test "$copied" -eq 0
-  test "$(psql_wh "SELECT amount FROM warehouse.ext_invoice WHERE invoice_id = 101")" = "10"
-  test "$(psql_wh "SELECT amount FROM warehouse.ext_invoice WHERE invoice_id = 102")" = ""
-  test "$(psql_wh "SELECT amount FROM warehouse.ext_invoice WHERE invoice_id = 103")" = "20"
-  test "$(psql_wh "SELECT amount FROM warehouse.ext_invoice WHERE invoice_id = 104")" = ""
+  test "$(psql_wh "SELECT amount = 10 FROM warehouse.ext_invoice WHERE invoice_id = 101")" = "t"
+  test "$(psql_wh "SELECT amount IS NULL FROM warehouse.ext_invoice WHERE invoice_id = 102")" = "t"
+  test "$(psql_wh "SELECT amount = 20 FROM warehouse.ext_invoice WHERE invoice_id = 103")" = "t"
+  test "$(psql_wh "SELECT amount IS NULL FROM warehouse.ext_invoice WHERE invoice_id = 104")" = "t"
   test "$(psql_wh "SELECT count(*) FROM dq.traces WHERE kind = 'apply_succeeded' AND body ->> 'quality_run_id' = '$run_id'")" -eq 0
   test "$(psql_wh "SELECT count(*) FROM dq.traces WHERE kind = 'human_approved' AND body ->> 'quality_run_id' = '$run_id'")" -eq 0
   test "$(psql_wh "SELECT count(*) FROM dq.traces WHERE kind = '$expected_kind' AND body ->> 'quality_run_id' = '$run_id'")" -ge 1
@@ -125,18 +155,18 @@ wait_for_hitl() {
   local run_id="$1"
   local deadline=$((SECONDS + 180))
   while ((SECONDS < deadline)); do
-    code="$(
-      curl -sS -o /tmp/hitl-detail.json -w '%{http_code}' \
+    split_body_code "$(
+      api_curl_code \
         -H "$auth_header" \
-        "$API/api/v2/dags/${DAG_ID}/dagRuns/${run_id}/taskInstances/${HITL_TASK}/-1/hitlDetails" || true
+        "http://127.0.0.1:8080/api/v2/dags/${DAG_ID}/dagRuns/${run_id}/taskInstances/${HITL_TASK}/-1/hitlDetails" || true
     )"
-    if [[ "$code" == "200" ]]; then
+    if [[ "$HTTP_CODE" == "200" ]]; then
       return 0
     fi
     sleep 3
   done
-  echo "HITL detail was not ready for $run_id" >&2
-  cat /tmp/hitl-detail.json >&2 || true
+  echo "HITL detail was not ready for $run_id (last HTTP ${HTTP_CODE:-none})" >&2
+  printf '%s\n' "$HTTP_BODY" >&2 || true
   docker compose exec -T airflow-scheduler airflow tasks states-for-dag-run "$DAG_ID" "$run_id" >&2 || true
   exit 1
 }
@@ -162,8 +192,8 @@ wait_dag_terminal() {
   local deadline=$((SECONDS + 180))
   while ((SECONDS < deadline)); do
     state="$(
-      curl -sf -H "$auth_header" \
-        "$API/api/v2/dags/${DAG_ID}/dagRuns/${run_id}" \
+      api_curl -f -H "$auth_header" \
+        "http://127.0.0.1:8080/api/v2/dags/${DAG_ID}/dagRuns/${run_id}" \
         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))' || true
     )"
     case "$state" in
@@ -183,11 +213,18 @@ reject_run="reject-proof"
 docker compose exec -T airflow-scheduler airflow dags trigger "$DAG_ID" --run-id "$reject_run"
 wait_for_hitl "$reject_run"
 reject_qid="$(quality_run_id_for "$reject_run")"
-curl -sf -X PATCH \
-  -H "$auth_header" \
-  -H 'Content-Type: application/json' \
-  -d '{"chosen_options":["Reject"],"params_input":{"approval_note":"Do not copy invoices into quarantine."}}' \
-  "$API/api/v2/dags/${DAG_ID}/dagRuns/${reject_run}/taskInstances/${HITL_TASK}/-1/hitlDetails" >/dev/null
+split_body_code "$(
+  api_curl_code -X PATCH \
+    -H "$auth_header" \
+    -H 'Content-Type: application/json' \
+    -d '{"chosen_options":["Reject"],"params_input":{"approval_note":"Do not copy invoices into quarantine."}}' \
+    "http://127.0.0.1:8080/api/v2/dags/${DAG_ID}/dagRuns/${reject_run}/taskInstances/${HITL_TASK}/-1/hitlDetails" || true
+)"
+if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
+  echo "HITL Reject PATCH failed HTTP ${HTTP_CODE:-none}" >&2
+  printf '%s\n' "$HTTP_BODY" >&2 || true
+  exit 1
+fi
 wait_dag_terminal "$reject_run"
 assert_zero_writes "$reject_qid" "human_rejected" ""
 
