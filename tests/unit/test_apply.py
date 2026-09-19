@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -785,6 +785,61 @@ def test_integrity_error_loser_recovers_the_committed_result(
     assert second.audit_event_id == first.audit_event_id
     assert second.run_id == first.run_id
     kinds = [getattr(event, "kind", None) for event in lineage]
+    assert "apply_failed" not in kinds
+
+
+def test_expired_admission_with_committed_result_returns_it_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-expiry-first",
+        audit_sink=_ListSink(),
+    )
+    inserts_after_first = len(engine.mutation_sqls())
+    expired = now + timedelta(hours=25)
+
+    second = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=expired,
+        run_id="unit-expiry-second",
+        audit_sink=_ListSink(),
+    )
+
+    assert second.apply_result_id == first.apply_result_id
+    assert second.audit_event_id == first.audit_event_id
+    assert second.run_id == first.run_id
+    assert len(engine.mutation_sqls()) == inserts_after_first
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
     assert "apply_failed" not in kinds
 
 

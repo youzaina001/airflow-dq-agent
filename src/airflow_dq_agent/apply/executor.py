@@ -218,7 +218,6 @@ def _require_plan_admission(
     admission: ApplyAdmission,
     *,
     report: QualitySuiteReport,
-    now: datetime,
     connection: object | None = None,
 ) -> None:
     if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
@@ -229,8 +228,6 @@ def _require_plan_admission(
     verify_plan_integrity(plan, refusing="apply")
     verify_evaluation_integrity(plan, evaluation, refusing="apply")
     verify_admission_integrity(plan, evaluation, admission, refusing="apply")
-    if now > admission.expires_at:
-        raise PermissionError("Refusing apply: apply admission has expired")
     current_policy = current_policy_fingerprint(plan)
     if current_policy != plan.policy_fingerprint or current_policy != admission.policy_fingerprint:
         raise PermissionError("Refusing apply: policy snapshot drifted after admission")
@@ -397,7 +394,7 @@ def apply_plan(
     else:
         if admission is None:
             raise PermissionError("Refusing apply: mutation requires an apply admission")
-        _require_plan_admission(plan, evaluation, admission, report=report, now=applied_at)
+        _require_plan_admission(plan, evaluation, admission, report=report)
         _require_apply_warehouse_environment(
             plan,
             admission,
@@ -406,6 +403,21 @@ def apply_plan(
             engine=engine,
         )
     database = engine or make_engine(dsn or get_settings().apply_dsn)
+    if not dry_run:
+        assert admission is not None
+        if applied_at > admission.expires_at:
+            try:
+                recovered = _recover_committed_result(
+                    database, plan=plan, evaluation=evaluation, admission=admission
+                )
+            except Exception:
+                logger.warning(
+                    "expired-admission recovery lookup failed; refusing the expired admission"
+                )
+                recovered = None
+            if recovered is not None:
+                return recovered
+            raise PermissionError("Refusing apply: apply admission has expired")
     resolved_run_id = run_id or uuid4().hex
     executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
     resolver = PostgresTargetSetResolver(engine=database)
@@ -427,7 +439,6 @@ def apply_plan(
                     evaluation,
                     admission,
                     report=report,
-                    now=applied_at,
                     connection=connection,
                 )
             for item in executable:
