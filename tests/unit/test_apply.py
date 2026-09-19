@@ -641,6 +641,153 @@ def test_retry_of_committed_admission_returns_the_original_result(
     assert "apply_failed" not in kinds
 
 
+def test_unknown_committed_result_fails_closed_without_apply_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    engine.consumed.add(admission.admission_id)
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    with pytest.raises(PermissionError, match="could not be recovered"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            run_id="unit-unknown-commit",
+            audit_sink=_ListSink(),
+        )
+
+    assert engine.mutation_sqls() == []
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
+
+
+def test_recovery_refuses_a_tampered_committed_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-tamper-first",
+        audit_sink=_ListSink(),
+    )
+    committed = engine.committed[admission.admission_id]
+    body = committed["event_body"]
+    assert isinstance(body, dict)
+    body["plan_fingerprint"] = "forged-fingerprint"
+    inserts_after_first = len(engine.mutation_sqls())
+
+    with pytest.raises(PermissionError, match="does not bind the supplied payloads"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            run_id="unit-tamper-second",
+            audit_sink=_ListSink(),
+        )
+
+    assert len(engine.mutation_sqls()) == inserts_after_first
+    assert first.audit_event_id
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
+
+
+def test_integrity_error_loser_recovers_the_committed_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    winner = _RecoveryEngine()
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.JsonlAuditSink", _NoopAuditSink)
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=winner,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-race-winner",
+    )
+
+    loser = _RecoveryEngine()
+    loser.committed.update(winner.committed)
+    loser.fail_record_for.add(admission.admission_id)
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    second = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=loser,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-race-loser",
+        audit_sink=_NoopAuditSink(),
+    )
+
+    assert second.apply_result_id == first.apply_result_id
+    assert second.audit_event_id == first.audit_event_id
+    assert second.run_id == first.run_id
+    kinds = [getattr(event, "kind", None) for event in lineage]
+    assert "apply_failed" not in kinds
+
+
 def test_pre_commit_apply_failure_still_emits_apply_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
