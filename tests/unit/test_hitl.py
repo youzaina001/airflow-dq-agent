@@ -103,6 +103,21 @@ def test_structured_approval_requires_allowlisted_actor_and_note() -> None:
     assert decision.note == "Reviewed exact target counts."
 
 
+def test_structured_reject_accepts_allowlisted_airflow_username_when_id_is_numeric() -> None:
+    decision = parse_approval_output(
+        {
+            "chosen_options": ["Reject"],
+            "params_input": {"approval_note": "Do not copy."},
+            "responded_by_user": {"id": "1", "name": "airflow"},
+            "timedout": False,
+        },
+        approver_ids={"airflow"},
+    )
+
+    assert decision.decision == "Reject"
+    assert decision.actor == "airflow"
+
+
 def test_structured_timeout_is_not_a_human_approval() -> None:
     decision = parse_approval_output(
         {

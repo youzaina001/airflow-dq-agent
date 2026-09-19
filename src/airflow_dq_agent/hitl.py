@@ -19,6 +19,14 @@ def _actor_id(value: object) -> str | None:
     return str(actor) if actor is not None else None
 
 
+def _actor_name(value: object) -> str | None:
+    if isinstance(value, Mapping):
+        name = value.get("name")
+        return str(name) if name is not None else None
+    name = getattr(value, "name", None)
+    return str(name) if name is not None else None
+
+
 def _note(params_input: object) -> str | None:
     if not isinstance(params_input, Mapping):
         return None
@@ -51,8 +59,14 @@ def parse_approval_output(output: Mapping[str, Any], *, approver_ids: Set[str]) 
     chosen = output.get("chosen_options")
     if not isinstance(chosen, list) or not all(isinstance(option, str) for option in chosen):
         raise PermissionError("Malformed ApprovalOperator output: chosen_options is required")
-    actor = _actor_id(output.get("responded_by_user"))
-    if actor is None or actor not in approver_ids:
+    responder = output.get("responded_by_user")
+    actor_id = _actor_id(responder)
+    actor_name = _actor_name(responder)
+    if actor_id is not None and actor_id in approver_ids:
+        actor = actor_id
+    elif actor_name is not None and actor_name in approver_ids:
+        actor = actor_name
+    else:
         raise PermissionError("ApprovalOperator responder is not an allow-listed Airflow user")
     note = _note(output.get("params_input"))
     if "Approve" in chosen and not note:

@@ -9,7 +9,7 @@ export AIRFLOW_UID
 export WAREHOUSE_DSN ?= postgresql+psycopg://dq:dq@localhost:5433/warehouse
 export TRACES_DIR ?= traces
 
-.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install ci catalog compose-smoke
+.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install ci catalog compose-smoke compose-hitl
 
 help:
 	@echo "make install   - editable install with dev extras (no Airflow)"
@@ -23,6 +23,7 @@ help:
 	@echo "make check     - lint, typecheck, and unit tests"
 	@echo "make catalog   - run the bundled demo FastMCP catalog server"
 	@echo "make compose-smoke - deterministic stub/shadow Compose DAG smoke test"
+	@echo "make compose-hitl  - actual Airflow Reject/Timeout zero-quarantine proof"
 	@echo "make lint fmt typecheck ci"
 
 install:
@@ -59,6 +60,9 @@ catalog:
 
 compose-smoke:
 	bash scripts/compose-smoke.sh
+
+compose-hitl:
+	bash scripts/compose-hitl-reject-timeout.sh
 
 lint:
 	$(PYTHON) -m ruff check src tests dags examples
