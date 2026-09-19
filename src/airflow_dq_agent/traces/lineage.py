@@ -9,6 +9,7 @@ from airflow_dq_agent.contracts.fingerprints import (
     report_payload_fingerprint,
 )
 from airflow_dq_agent.contracts.models import (
+    AppliedStepEvidence,
     ApplyAdmission,
     ApprovalReview,
     AuditEvent,
@@ -185,6 +186,7 @@ def apply_result_event(
     result_id: str,
     result_fingerprint: str,
     dry_run: bool,
+    apply_steps: list[AppliedStepEvidence] | None = None,
     reasons: list[str] | None = None,
     failed: bool = False,
 ) -> AuditEvent:
@@ -212,5 +214,6 @@ def apply_result_event(
         decision_id=admission.decision_id if admission else None,
         apply_result_id=result_id,
         apply_result_fingerprint=result_fingerprint,
+        apply_steps=apply_steps or [],
         reasons=reasons or [],
     )
