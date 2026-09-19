@@ -495,6 +495,8 @@ def test_timed_out_external_invoice_writes_zero_quarantine_rows(
     module, tasks, report_payload, evaluated_payload = _evaluate_example(
         monkeypatch, required_warehouse_dsn, credentials
     )
+    assert module.settings.llm_mode == "stub"
+    assert module.settings.openai_api_key is None
 
     report = QualitySuiteReport.model_validate(report_payload)
     plan = RemediationPlan.model_validate(evaluated_payload["plan"])
@@ -502,7 +504,6 @@ def test_timed_out_external_invoice_writes_zero_quarantine_rows(
 
     decision = _record_hitl_decision(
         provider_event={
-            "chosen_options": ["Reject"],
             "responded_by_user": None,
             "params_input": {},
             "timedout": True,
