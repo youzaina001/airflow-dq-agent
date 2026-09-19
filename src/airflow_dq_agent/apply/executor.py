@@ -51,6 +51,11 @@ class _AdmissionConsumed(PermissionError):
     """Raised in-transaction when the admission already carries a committed result."""
 
 
+def _is_serialization_failure(exc: BaseException) -> bool:
+    """Detect a SQLSTATE 40001 abort: the txn rolled back, commit fate unknown."""
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40001"
+
+
 class _AuditEventSink(Protocol):
     def append(self, event: AuditEvent) -> None: ...
 
@@ -114,9 +119,7 @@ def _refuse_consumed_admission(connection: object, admission: ApplyAdmission) ->
         {"admission_id": admission.admission_id},
     ).scalar()
     if consumed:
-        raise _AdmissionConsumed(
-            "Refusing apply: apply admission has already been consumed"
-        )
+        raise _AdmissionConsumed("Refusing apply: apply admission has already been consumed")
 
 
 def _recover_committed_result(
@@ -134,8 +137,8 @@ def _recover_committed_result(
     refused instead of being silently accepted.
     """
     with database.begin() as connection:
-        connection.execute(text("SET TRANSACTION READ ONLY"))  # type: ignore[attr-defined]
-        row = connection.execute(  # type: ignore[attr-defined]
+        connection.execute(text("SET TRANSACTION READ ONLY"))
+        row = connection.execute(
             text(
                 "SELECT run_id, plan_id, target_count, rowcount, event_body "
                 "FROM dq.committed_apply_result(:admission_id)"
@@ -175,7 +178,7 @@ def _recover_committed_result(
     if not isinstance(recorded_steps, list) or len(recorded_steps) != len(executable):
         raise _refuse("apply step evidence does not match the supplied plan")
     steps: list[AppliedStep] = []
-    for item, entry in zip(executable, recorded_steps):
+    for item, entry in zip(executable, recorded_steps, strict=True):
         if not isinstance(entry, dict):
             raise _refuse("apply step evidence is malformed")
         if entry.get("action_id") != item.action_id or entry.get("table") != item.table:
@@ -518,7 +521,18 @@ def apply_plan(
             "Refusing apply: apply admission has already been consumed and its "
             "committed result could not be recovered"
         ) from exc
-    except Exception:
+    except Exception as exc:
+        if _is_serialization_failure(exc):
+            assert admission is not None
+            recovered = _recover_committed_result(
+                database, plan=plan, evaluation=evaluation, admission=admission
+            )
+            if recovered is not None:
+                return recovered
+            raise PermissionError(
+                "Refusing apply: apply could not commit under concurrent access and "
+                "its committed result could not be recovered"
+            ) from exc
         _emit_apply_failed(
             plan,
             evaluation,
