@@ -178,14 +178,17 @@ credentials = provision_restricted_logins(owner_dsn)
    `READ_DSN`, HITL/Audit Lineage to `AUDIT_DSN`, and apply to `APPLY_DSN`.
 5. Keep `LLM_MODE=stub`. Leave `APPLY_MODE=off` until you intend a Human Decision.
    Then set `APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed
-   `HITL_APPROVER_IDS` identity. Unpause the DAG, review the evaluated Remediation
-   Plan in Airflow, and approve with a non-empty note.
-6. Inspect `dq.quarantine_rows.pk_json` for the authorized invoice ids and confirm
-   `warehouse.ext_invoice` is unchanged. Audit Lineage on `dq.traces` connects the
-   quality report, Remediation Plan, evaluation, Human Decision, and apply result.
+   `HITL_APPROVER_IDS` identity. Unpause `dq_external_invoice`.
+6. Approve, reject, or let the HITL task time out. Inspect PostgreSQL after each
+   outcome — do not treat a skipped Postgres or Airflow run as acceptance.
 
-Rejection and timeout are out of scope for this example. Do not treat a skipped
-Postgres or Airflow run as acceptance.
+   | Outcome | How to exercise | `dq.quarantine_rows` | Source `warehouse.ext_invoice` | Audit Lineage |
+   | --- | --- | --- | --- | --- |
+   | Approve | Required Actions: choose Approve and a non-empty note | Copies missing-amount ids 102 and 104 | Unchanged (101/103 keep amounts; 102/104 stay NULL) | `human_approved` then `apply_succeeded` |
+   | Reject | Required Actions: choose Reject | Empty for that run | Unchanged | `human_rejected`; no `apply_succeeded` |
+   | Timeout | Do not respond before `DQ_HITL_TIMEOUT_SECONDS` (default 86400). Pinned `apache-airflow-providers-standard==1.12.1` uses `execution_timeout`, not `response_timeout`. | Empty for that run | Unchanged | `human_timed_out` with actor `airflow-timeout`; not an approval |
+
+   `scripts/compose-hitl-reject-timeout.sh` runs Reject and Timeout against real Airflow and asserts these outcomes. Timeout cannot be interpreted as Approve.
 
 ## Quick start
 

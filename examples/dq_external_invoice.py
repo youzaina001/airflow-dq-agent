@@ -11,6 +11,7 @@ human should approve quarantine copies through Airflow.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -45,6 +46,9 @@ register_external_invoice()
 settings = get_settings()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
     raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")
+
+# providers-standard 1.12.1 times HITL with execution_timeout (response_timeout is 1.12.2+).
+_HITL_TIMEOUT = timedelta(seconds=int(os.environ.get("DQ_HITL_TIMEOUT_SECONDS", "86400")))
 
 
 @dag(
@@ -215,7 +219,6 @@ def dq_external_invoice() -> None:
             audit_dsn=settings.audit_dsn,
             defaults="Reject",
             fail_on_reject=False,
-            assigned_users=settings.hitl_assigned_users,
             params={
                 "approval_note": {
                     "type": "string",
@@ -223,7 +226,7 @@ def dq_external_invoice() -> None:
                     "minLength": 1,
                 }
             },
-            response_timeout=timedelta(hours=24),
+            execution_timeout=_HITL_TIMEOUT,
         )
         approval_gate >> approval
         admission = admit_apply_task(report, evaluated, approval.output)

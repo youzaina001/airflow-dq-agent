@@ -266,6 +266,23 @@ def test_example_dag_binds_restricted_read_audit_and_apply_dsns(
     assert operator_kwargs[0]["audit_dsn"] is not None
 
 
+def test_example_dag_hitl_timeout_uses_execution_timeout_compatible_with_provider_1_12_1() -> None:
+    """Pinned apache-airflow-providers-standard==1.12.1 has no response_timeout."""
+    source = EXAMPLE_DAG.read_text(encoding="utf-8")
+    assert "response_timeout=" not in source
+    assert "execution_timeout=" in source
+    assert "DQ_HITL_TIMEOUT_SECONDS" in source
+
+
+def test_example_dag_skips_apply_on_reject_and_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _module, tasks, _kwargs = _load_example_dag(monkeypatch)
+    admit_src = inspect.getsource(tasks["admit_apply_task"])
+    assert 'if parsed_decision.decision in {"Reject", "Timeout"}:' in admit_src
+    assert "AirflowSkipException" in admit_src
+
+
 def test_documentation_describes_quarantine_copy_not_source_repair() -> None:
     readme = README.read_text(encoding="utf-8")
     dag = EXAMPLE_DAG.read_text(encoding="utf-8")
@@ -278,3 +295,15 @@ def test_documentation_describes_quarantine_copy_not_source_repair() -> None:
     assert "APPLY_MODE=hitl" in readme
     assert "LLM_MODE=stub" in readme
     assert "repair" in combined.lower()
+
+
+def test_documentation_describes_how_to_exercise_rejection_and_timeout() -> None:
+    readme = README.read_text(encoding="utf-8")
+    assert "Rejection and timeout are out of scope" not in readme
+    assert "human_rejected" in readme
+    assert "human_timed_out" in readme
+    assert "airflow-timeout" in readme
+    assert "dq.quarantine_rows" in readme
+    assert "Reject" in readme
+    assert "Timeout" in readme or "timeout" in readme
+    assert (REPO / "scripts" / "compose-hitl-reject-timeout.sh").is_file()
