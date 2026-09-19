@@ -20,6 +20,7 @@ from airflow_dq_agent.action_definitions import (
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
+    AppliedStepEvidence,
     ApplyAdmission,
     AuditEvent,
     EvalReport,
@@ -44,6 +45,15 @@ from airflow_dq_agent.traces.writer import JsonlAuditSink, append_event
 from airflow_dq_agent.warehouse.db import make_engine
 
 logger = logging.getLogger(__name__)
+
+
+class _AdmissionConsumed(PermissionError):
+    """Raised in-transaction when the admission already carries a committed result."""
+
+
+def _is_serialization_failure(exc: BaseException) -> bool:
+    """Detect a SQLSTATE 40001 abort: the txn rolled back, commit fate unknown."""
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40001"
 
 
 class _AuditEventSink(Protocol):
@@ -109,7 +119,100 @@ def _refuse_consumed_admission(connection: object, admission: ApplyAdmission) ->
         {"admission_id": admission.admission_id},
     ).scalar()
     if consumed:
-        raise PermissionError("Refusing apply: apply admission has already been consumed")
+        raise _AdmissionConsumed("Refusing apply: apply admission has already been consumed")
+
+
+def _recover_committed_result(
+    database: Engine,
+    *,
+    plan: RemediationPlan,
+    evaluation: EvalReport,
+    admission: ApplyAdmission,
+) -> ApplyResult | None:
+    """Return the already committed result for this admission, without mutating.
+
+    Deliberately read-only: a repeated or expired call may report the committed
+    outcome, but the lookup never authorizes a new mutation and never mints
+    fresh authority.  A payload that does not bind the committed evidence is
+    refused instead of being silently accepted.
+    """
+    with database.begin() as connection:
+        connection.execute(text("SET TRANSACTION READ ONLY"))
+        row = connection.execute(
+            text(
+                "SELECT run_id, plan_id, target_count, rowcount, event_body "
+                "FROM dq.committed_apply_result(:admission_id)"
+            ),
+            {"admission_id": admission.admission_id},
+        ).first()
+    if row is None:
+        return None
+    run_id, apply_log_plan_id, _target_count, _rowcount_total, event_body = row
+    body = json.loads(event_body) if isinstance(event_body, (str, bytes)) else event_body
+
+    def _refuse(detail: str) -> PermissionError:
+        return PermissionError(
+            "Refusing apply recovery: committed result does not bind the "
+            f"supplied payloads ({detail})"
+        )
+
+    if not isinstance(body, dict):
+        raise _refuse("event body is not an object")
+    if apply_log_plan_id != plan.plan_id:
+        raise _refuse("apply log plan_id does not match")
+    bound = {
+        "kind": "apply_succeeded",
+        "quality_run_id": plan.quality_run_id,
+        "plan_id": plan.plan_id,
+        "plan_fingerprint": plan.fingerprint,
+        "policy_fingerprint": admission.policy_fingerprint,
+        "evaluation_id": admission.evaluation_id,
+        "evaluation_fingerprint": admission.evaluation_fingerprint,
+        "decision_id": admission.decision_id,
+    }
+    for key, wanted in bound.items():
+        if body.get(key) != wanted:
+            raise _refuse(f"{key} does not match")
+    recorded_steps = body.get("apply_steps")
+    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    if not isinstance(recorded_steps, list) or len(recorded_steps) != len(executable):
+        raise _refuse("apply step evidence does not match the supplied plan")
+    steps: list[AppliedStep] = []
+    for item, entry in zip(executable, recorded_steps, strict=True):
+        if not isinstance(entry, dict):
+            raise _refuse("apply step evidence is malformed")
+        if entry.get("action_id") != item.action_id or entry.get("table") != item.table:
+            raise _refuse("apply step evidence does not match the supplied plan")
+        action = get_governed_action(item.action_id)
+        rendered = action.render(table=item.table, params=item.params, run_id=str(run_id))
+        estimated = entry.get("estimated_rows")
+        rowcount = entry.get("rowcount")
+        steps.append(
+            AppliedStep(
+                rendered=rendered,
+                estimated_rows=estimated if isinstance(estimated, int) else None,
+                rowcount=rowcount if isinstance(rowcount, int) else None,
+            )
+        )
+    recomputed = _result_fingerprint(plan, admission, str(run_id), False, steps)
+    if recomputed != body.get("apply_result_fingerprint"):
+        raise _refuse("result fingerprint does not match the committed evidence")
+    result_id = body.get("apply_result_id")
+    event_id = body.get("event_id")
+    if not isinstance(result_id, str) or not result_id:
+        raise _refuse("apply result id is missing")
+    if not isinstance(event_id, str) or not event_id:
+        raise _refuse("audit event id is missing")
+    return ApplyResult(
+        apply_result_id=result_id,
+        fingerprint=recomputed,
+        audit_event_id=event_id,
+        run_id=str(run_id),
+        dry_run=False,
+        plan_id=plan.plan_id,
+        admission_id=admission.admission_id,
+        steps=steps,
+    )
 
 
 def _require_plan_admission(
@@ -118,7 +221,6 @@ def _require_plan_admission(
     admission: ApplyAdmission,
     *,
     report: QualitySuiteReport,
-    now: datetime,
     connection: object | None = None,
 ) -> None:
     if plan.blocked or any(not isinstance(item, ExecutablePlanItem) for item in plan.items):
@@ -129,8 +231,6 @@ def _require_plan_admission(
     verify_plan_integrity(plan, refusing="apply")
     verify_evaluation_integrity(plan, evaluation, refusing="apply")
     verify_admission_integrity(plan, evaluation, admission, refusing="apply")
-    if now > admission.expires_at:
-        raise PermissionError("Refusing apply: apply admission has expired")
     current_policy = current_policy_fingerprint(plan)
     if current_policy != plan.policy_fingerprint or current_policy != admission.policy_fingerprint:
         raise PermissionError("Refusing apply: policy snapshot drifted after admission")
@@ -297,7 +397,7 @@ def apply_plan(
     else:
         if admission is None:
             raise PermissionError("Refusing apply: mutation requires an apply admission")
-        _require_plan_admission(plan, evaluation, admission, report=report, now=applied_at)
+        _require_plan_admission(plan, evaluation, admission, report=report)
         _require_apply_warehouse_environment(
             plan,
             admission,
@@ -306,6 +406,21 @@ def apply_plan(
             engine=engine,
         )
     database = engine or make_engine(dsn or get_settings().apply_dsn)
+    if not dry_run:
+        assert admission is not None
+        if applied_at > admission.expires_at:
+            try:
+                recovered = _recover_committed_result(
+                    database, plan=plan, evaluation=evaluation, admission=admission
+                )
+            except Exception:
+                logger.warning(
+                    "expired-admission recovery lookup failed; refusing the expired admission"
+                )
+                recovered = None
+            if recovered is not None:
+                return recovered
+            raise PermissionError("Refusing apply: apply admission has expired")
     resolved_run_id = run_id or uuid4().hex
     executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
     resolver = PostgresTargetSetResolver(engine=database)
@@ -327,7 +442,6 @@ def apply_plan(
                     evaluation,
                     admission,
                     report=report,
-                    now=applied_at,
                     connection=connection,
                 )
             for item in executable:
@@ -372,6 +486,15 @@ def apply_plan(
                 result_id=result.apply_result_id,
                 result_fingerprint=result.fingerprint,
                 dry_run=dry_run,
+                apply_steps=[
+                    AppliedStepEvidence(
+                        action_id=step.rendered.action_id,
+                        table=step.rendered.table,
+                        estimated_rows=step.estimated_rows,
+                        rowcount=step.rowcount,
+                    )
+                    for step in result.steps
+                ],
             )
             result.audit_event_id = event.event_id
             if not dry_run:
@@ -381,13 +504,35 @@ def apply_plan(
                         connection, event=event, result=result, plan=plan, admission=admission
                     )
                 except IntegrityError as exc:
-                    raise PermissionError(
+                    raise _AdmissionConsumed(
                         "Refusing apply: apply admission has already been consumed"
                     ) from exc
         if dry_run:
             assert event is not None
             append_event(event)
-    except Exception:
+    except _AdmissionConsumed as exc:
+        assert admission is not None
+        recovered = _recover_committed_result(
+            database, plan=plan, evaluation=evaluation, admission=admission
+        )
+        if recovered is not None:
+            return recovered
+        raise PermissionError(
+            "Refusing apply: apply admission has already been consumed and its "
+            "committed result could not be recovered"
+        ) from exc
+    except Exception as exc:
+        if _is_serialization_failure(exc):
+            assert admission is not None
+            recovered = _recover_committed_result(
+                database, plan=plan, evaluation=evaluation, admission=admission
+            )
+            if recovered is not None:
+                return recovered
+            raise PermissionError(
+                "Refusing apply: apply could not commit under concurrent access and "
+                "its committed result could not be recovered"
+            ) from exc
         _emit_apply_failed(
             plan,
             evaluation,
