@@ -32,6 +32,14 @@ _Avoid_: Latest configuration, current rule
 The immutable association from a quality suite report through its remediation plan, evaluation, human decision, and apply result.
 _Avoid_: Log, history
 
+**Quarantine**:
+A copy of the authorized Remediation Target Set into a holding table. It is not a repair of source rows.
+_Avoid_: Fix, repair, source update
+
+**Shadow Review**:
+An evaluated, sample-free Remediation Plan review recorded in Audit Lineage without a Human Decision or Apply Admission.
+_Avoid_: Approval, dry run, shadow skip
+
 **Apply Admission**:
 The durable, single-use authorization to execute one evaluated remediation plan after its whole-plan human decision. It cannot authorize a different plan or report, and it cannot be consumed twice.
 _Avoid_: Approval, permission
