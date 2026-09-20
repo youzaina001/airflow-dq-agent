@@ -92,9 +92,10 @@ number, and an OpenRouter model from the dropdown. Default model is
 `z-ai/glm-5.3-flash`.
 
 **PR comment.** On a pull request, a MEMBER/OWNER/COLLABORATOR can comment
-`@ocr`. Optionally pass a dropdown model id: `@ocr x-ai/grok-4.6`. Any other
-token after `@ocr` is ignored and the default model is used. Comment triggers
-use the workflow file on the default branch, so `@ocr` works only after this
+`OCReview`. Optionally pass a dropdown model id: `OCReview x-ai/grok-4.6`.
+Any other token after `OCReview` is ignored and the default model is used.
+`@OCReview` also matches once that GitHub name exists. Comment triggers use
+the workflow file on the default branch, so they work only after this
 workflow has landed on `master`.
 
 ```bash
@@ -108,7 +109,7 @@ Set one secret under **Settings -> Secrets and variables -> Actions**:
 | `OPENROUTER_API_KEY` | OpenRouter key (`sk-or-...`) |
 
 The workflow pins the action to OCR v1.12.7 and the npm CLI via `ocr_version`.
-Manual runs and `@ocr` comments have access to repository secrets; OCR only
+Manual runs and `OCReview` comments have access to repository secrets; OCR only
 reads the diff.
 
 **Pilot mode.** The review step is `continue-on-error: true`, so findings never
@@ -119,7 +120,7 @@ gate, and only then consider failing the job on high-severity findings.
 
 1. **Local, before push** — `make review` (or a `pre-push` hook) to catch issues
    before they cost a CI cycle. `make review-preview` costs nothing.
-2. **On-demand PR review** — `workflow_dispatch` or `@ocr` on the PR, advisory
+2. **On-demand PR review** — `workflow_dispatch` or `OCReview` on the PR, advisory
    during the pilot.
 3. **Brownfield audit** — `ocr scan --path <dir>` for code that predates the
    diff-based loop.
@@ -142,7 +143,7 @@ Cost and latency levers, cheapest first:
   still published.
 - `--concurrency <n>` — parallel subtasks (default 8); lower it if OpenRouter
   rate-limits, raise it for many-file diffs.
-- Model dropdown on `workflow_dispatch` (or `@ocr <model>` on a PR) — point CI
+- Model dropdown on `workflow_dispatch` (or `OCReview <model>` on a PR) — point CI
   at a faster model without editing the workflow.
 
 The CI job has `timeout-minutes: 30`; raise it for large PRs.

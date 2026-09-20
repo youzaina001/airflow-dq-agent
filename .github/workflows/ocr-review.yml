@@ -5,8 +5,8 @@
 #   OPENROUTER_API_KEY   OpenRouter API key (sk-or-...)
 #
 # Start a review from Actions -> OpenCodeReview PR Review -> Run workflow
-# (PR number + model dropdown), or by commenting `@ocr` on a pull request.
-# `@ocr <openrouter-model-id>` uses that model when it is in the dropdown;
+# (PR number + model dropdown), or by commenting OCReview on a pull request.
+# `OCReview <openrouter-model-id>` uses that model when it is in the dropdown;
 # otherwise the default is z-ai/glm-5.3-flash.
 #
 # Pilot note: the review step sets `continue-on-error: true`, so findings are
@@ -60,7 +60,7 @@ jobs:
           || github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'COLLABORATOR'
         )
-        && contains(github.event.comment.body, '@ocr')
+        && contains(github.event.comment.body, 'OCReview')
       )
     steps:
       - name: Get PR context
@@ -87,7 +87,7 @@ jobs:
               if (allowed.includes(chosen)) model = chosen;
             } else {
               const body = context.payload.comment.body || '';
-              const mention = body.match(/(^|\s)@ocr(?:\s+(\S+))?/i);
+              const mention = body.match(/(^|\s)@?OCReview(?:\s+(\S+))?/i);
               if (!mention) {
                 core.setOutput('skip', 'true');
                 return;

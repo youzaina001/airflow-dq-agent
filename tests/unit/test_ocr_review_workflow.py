@@ -40,5 +40,6 @@ def test_ocr_review_workflow_is_manual_with_model_choice() -> None:
 
     assert "issue_comment" in triggers
     job_if = workflow["jobs"]["code-review"]["if"]
-    assert "@ocr" in job_if
+    assert "OCReview" in job_if
+    assert "@ocr" not in job_if
     assert "workflow_dispatch" in job_if
