@@ -410,6 +410,15 @@ class ToolCallRecord(BaseModel):
     error: str | None = None
 
 
+class AppliedStepEvidence(BaseModel):
+    """Sample-free per-step counts recorded with a committed apply result."""
+
+    action_id: str
+    table: str
+    estimated_rows: int | None = None
+    rowcount: int | None = None
+
+
 class AuditEvent(BaseModel):
     """A minimized immutable lineage event safe to persist in JSONL or Postgres."""
 
@@ -453,5 +462,6 @@ class AuditEvent(BaseModel):
     decision_note: str | None = None
     apply_result_id: str | None = None
     apply_result_fingerprint: str | None = None
+    apply_steps: list[AppliedStepEvidence] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     fingerprint: str = Field(min_length=1)

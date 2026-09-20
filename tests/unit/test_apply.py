@@ -1,10 +1,11 @@
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
@@ -484,9 +485,9 @@ def test_default_jsonl_sink_fault_after_commit_keeps_apply_success(
     assert "sample_failures" not in caplog.text
 
 
-class _OneShotConnection:
-    def __init__(self, consumed: set[str]) -> None:
-        self.consumed = consumed
+class _RecoveryConnection:
+    def __init__(self, engine) -> None:
+        self._engine = engine
         self.statements: list[str] = []
         self.calls: list[tuple[str, dict[str, object] | None]] = []
 
@@ -496,7 +497,7 @@ class _OneShotConnection:
         self.calls.append((sql, params))
         admission_id = str(params["admission_id"]) if params and "admission_id" in params else None
         if admission_id is not None and "admission_consumed" in sql:
-            consumed = admission_id in self.consumed
+            consumed = admission_id in self._engine.consumed
 
             class _ConsumedResult:
                 def scalar(self) -> bool:
@@ -507,7 +508,40 @@ class _OneShotConnection:
 
             return _ConsumedResult()
         if admission_id is not None and "record_apply_result" in sql:
-            self.consumed.add(admission_id)
+            if admission_id in self._engine.fail_record_for:
+                raise IntegrityError(sql, params, Exception("duplicate key value"))
+            if admission_id in self._engine.fail_record_serialization_for:
+                raise _serialization_failure()
+            body = json.loads(str(params["body"])) if params and "body" in params else {}
+            self._engine.committed[admission_id] = {
+                "run_id": params["run_id"] if params else "",
+                "plan_id": params["plan_id"] if params else "",
+                "target_count": params["target_count"] if params else None,
+                "rowcount": params["rowcount"] if params else None,
+                "event_body": body,
+            }
+            self._engine.consumed.add(admission_id)
+            return type(
+                "Result",
+                (),
+                {"rowcount": 1, "scalar": lambda self: None, "first": lambda self: None},
+            )()
+        if admission_id is not None and "committed_apply_result" in sql:
+            row = self._engine.committed.get(admission_id)
+
+            class _CommittedResult:
+                def first(self) -> tuple[object, ...] | None:
+                    if row is None:
+                        return None
+                    return (
+                        row["run_id"],
+                        row["plan_id"],
+                        row["target_count"],
+                        row["rowcount"],
+                        row["event_body"],
+                    )
+
+            return _CommittedResult()
         return type(
             "Result",
             (),
@@ -515,33 +549,206 @@ class _OneShotConnection:
         )()
 
 
-class _OneShotTransaction:
-    def __init__(self, consumed: set[str]) -> None:
-        self.connection = _OneShotConnection(consumed)
+class _RecoveryTransaction:
+    def __init__(self, engine) -> None:
+        self.connection = _RecoveryConnection(engine)
 
-    def __enter__(self) -> _OneShotConnection:
+    def __enter__(self) -> _RecoveryConnection:
         return self.connection
 
     def __exit__(self, *_: object) -> None:
         return None
 
 
-class _OneShotEngine:
+class _RecoveryEngine:
     def __init__(self) -> None:
         self.consumed: set[str] = set()
-        self.transaction = _OneShotTransaction(self.consumed)
+        self.committed: dict[str, dict[str, object]] = {}
+        self.fail_record_for: set[str] = set()
+        self.fail_record_serialization_for: set[str] = set()
+        self.transactions: list[_RecoveryTransaction] = []
 
-    def begin(self) -> _OneShotTransaction:
-        self.transaction = _OneShotTransaction(self.consumed)
-        return self.transaction
+    def begin(self) -> _RecoveryTransaction:
+        transaction = _RecoveryTransaction(self)
+        self.transactions.append(transaction)
+        return transaction
+
+    def all_sqls(self) -> list[str]:
+        return [
+            sql for transaction in self.transactions for sql in transaction.connection.statements
+        ]
+
+    def mutation_sqls(self) -> list[str]:
+        return [sql for sql in self.all_sqls() if sql.lstrip().startswith("INSERT INTO")]
 
 
-def test_apply_refuses_to_consume_the_same_admission_twice(
+def test_retry_of_committed_admission_returns_the_original_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime(2026, 8, 30, tzinfo=UTC)
     plan, evaluation, admission, report = _approved_quarantine_plan(now)
-    engine = _OneShotEngine()
+    engine = _RecoveryEngine()
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-recovery-first",
+        audit_sink=_ListSink(),
+    )
+    inserts_after_first = len(engine.mutation_sqls())
+    record_calls_after_first = engine.all_sqls().count("record_apply_result")
+
+    second = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-recovery-second",
+        audit_sink=_ListSink(),
+    )
+
+    assert first.admission_id == admission.admission_id
+    assert second.apply_result_id == first.apply_result_id
+    assert second.fingerprint == first.fingerprint
+    assert second.audit_event_id == first.audit_event_id
+    assert second.run_id == first.run_id
+    assert second.dry_run is False
+    assert second.plan_id == first.plan_id
+    assert second.admission_id == first.admission_id
+    assert [(step.rendered.action_id, step.rowcount) for step in second.steps] == [
+        (step.rendered.action_id, step.rowcount) for step in first.steps
+    ]
+    assert len(engine.mutation_sqls()) == inserts_after_first
+    assert engine.all_sqls().count("record_apply_result") == record_calls_after_first
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
+
+
+def test_unknown_committed_result_fails_closed_without_apply_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    engine.consumed.add(admission.admission_id)
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    with pytest.raises(PermissionError, match="could not be recovered"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            run_id="unit-unknown-commit",
+            audit_sink=_ListSink(),
+        )
+
+    assert engine.mutation_sqls() == []
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
+
+
+def test_recovery_refuses_a_tampered_committed_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-tamper-first",
+        audit_sink=_ListSink(),
+    )
+    committed = engine.committed[admission.admission_id]
+    body = committed["event_body"]
+    assert isinstance(body, dict)
+    body["plan_fingerprint"] = "forged-fingerprint"
+    inserts_after_first = len(engine.mutation_sqls())
+
+    with pytest.raises(PermissionError, match="does not bind the supplied payloads"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            run_id="unit-tamper-second",
+            audit_sink=_ListSink(),
+        )
+
+    assert len(engine.mutation_sqls()) == inserts_after_first
+    assert first.audit_event_id
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
+
+
+def test_integrity_error_loser_recovers_the_committed_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    winner = _RecoveryEngine()
     monkeypatch.setattr(
         "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
     )
@@ -553,16 +760,123 @@ def test_apply_refuses_to_consume_the_same_admission_twice(
         admission,
         report=report,
         dry_run=False,
-        engine=engine,  # type: ignore[arg-type]
+        engine=winner,  # type: ignore[arg-type]
         now=now,
-        run_id="unit-one-shot-first",
+        run_id="unit-race-winner",
     )
-    assert first.steps
-    first_mutations = [
-        sql for sql in engine.transaction.connection.statements if sql.lstrip().startswith("INSERT")
-    ]
 
-    with pytest.raises(PermissionError, match="already been consumed"):
+    loser = _RecoveryEngine()
+    loser.committed.update(winner.committed)
+    loser.fail_record_for.add(admission.admission_id)
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    second = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=loser,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-race-loser",
+        audit_sink=_NoopAuditSink(),
+    )
+
+    assert second.apply_result_id == first.apply_result_id
+    assert second.audit_event_id == first.audit_event_id
+    assert second.run_id == first.run_id
+    kinds = [getattr(event, "kind", None) for event in lineage]
+    assert "apply_failed" not in kinds
+
+
+def _serialization_failure() -> OperationalError:
+    orig = type("SerializationFailure", (Exception,), {"sqlstate": "40001"})(
+        "could not serialize access"
+    )
+    return OperationalError(
+        "SELECT dq.record_apply_result(:event_id, :kind, CAST(:body AS jsonb), ...)",
+        {},
+        orig,
+    )
+
+
+def test_serialization_failure_loser_recovers_when_a_result_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    winner = _RecoveryEngine()
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.JsonlAuditSink", _NoopAuditSink)
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=winner,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-serialization-winner",
+    )
+
+    loser = _RecoveryEngine()
+    loser.committed.update(winner.committed)
+    loser.fail_record_serialization_for.add(admission.admission_id)
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    second = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=loser,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-serialization-loser",
+        audit_sink=_NoopAuditSink(),
+    )
+
+    assert second.apply_result_id == first.apply_result_id
+    assert second.audit_event_id == first.audit_event_id
+    assert second.run_id == first.run_id
+    kinds = [getattr(event, "kind", None) for event in lineage]
+    assert "apply_failed" not in kinds
+
+
+def test_serialization_failure_without_committed_result_reports_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    engine.fail_record_serialization_for.add(admission.admission_id)
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    with pytest.raises(PermissionError, match="could not be recovered"):
         apply_plan(
             plan,
             evaluation,
@@ -571,14 +885,68 @@ def test_apply_refuses_to_consume_the_same_admission_twice(
             dry_run=False,
             engine=engine,  # type: ignore[arg-type]
             now=now,
-            run_id="unit-one-shot-second",
+            run_id="unit-serialization-unknown",
+            audit_sink=_ListSink(),
         )
 
-    second_mutations = [
-        sql for sql in engine.transaction.connection.statements if sql.lstrip().startswith("INSERT")
-    ]
-    assert first_mutations
-    assert second_mutations == []
+    assert engine.committed == {}
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
+
+
+def test_expired_admission_with_committed_result_returns_it_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    sink: list[object] = []
+
+    class _ListSink:
+        def append(self, event: object) -> None:
+            sink.append(event)
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-expiry-first",
+        audit_sink=_ListSink(),
+    )
+    inserts_after_first = len(engine.mutation_sqls())
+    expired = now + timedelta(hours=25)
+
+    second = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=expired,
+        run_id="unit-expiry-second",
+        audit_sink=_ListSink(),
+    )
+
+    assert second.apply_result_id == first.apply_result_id
+    assert second.audit_event_id == first.audit_event_id
+    assert second.run_id == first.run_id
+    assert len(engine.mutation_sqls()) == inserts_after_first
+    kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
 
 
 def test_pre_commit_apply_failure_still_emits_apply_failed(

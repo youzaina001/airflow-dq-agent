@@ -129,6 +129,7 @@ ALTER TABLE dq.apply_log
     ADD COLUMN IF NOT EXISTS item_id TEXT,
     ADD COLUMN IF NOT EXISTS target_count INTEGER,
     ADD COLUMN IF NOT EXISTS target_fingerprint TEXT;
+ALTER TABLE dq.apply_log ADD COLUMN IF NOT EXISTS event_id TEXT;
 
 DO $$
 BEGIN
@@ -173,10 +174,10 @@ AS $$
 BEGIN
     INSERT INTO dq.apply_log (
         run_id, plan_id, admission_id, item_id, action_id, table_name,
-        target_count, target_fingerprint, rowcount
+        target_count, target_fingerprint, rowcount, event_id
     ) VALUES (
         p_run_id, p_plan_id, p_admission_id, p_item_id, p_action_id, p_table_name,
-        p_target_count, p_target_fingerprint, p_rowcount
+        p_target_count, p_target_fingerprint, p_rowcount, p_event_id
     );
     INSERT INTO dq.traces (trace_id, kind, body)
     VALUES (p_event_id, p_kind, p_event_body);
@@ -234,3 +235,34 @@ $$;
 
 REVOKE ALL ON FUNCTION dq.admission_consumed(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION dq.admission_consumed(TEXT) TO dq_apply;
+
+-- Read-only twin of admission_consumed: reports the one committed apply result
+-- for an admission so a repeated call can return the original outcome without
+-- new mutation.  It exposes nothing else and never grants write authority.
+CREATE OR REPLACE FUNCTION dq.committed_apply_result(p_admission_id TEXT)
+RETURNS TABLE (
+    run_id TEXT,
+    plan_id TEXT,
+    target_count INTEGER,
+    rowcount INTEGER,
+    event_body JSONB
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = dq, pg_temp
+AS $$
+BEGIN
+    IF p_admission_id IS NULL OR btrim(p_admission_id) = '' THEN
+        RETURN;
+    END IF;
+    RETURN QUERY
+    SELECT l.run_id, l.plan_id, l.target_count, l.rowcount, t.body
+    FROM dq.apply_log l
+    JOIN dq.traces t ON t.trace_id = l.event_id
+    WHERE l.admission_id = p_admission_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION dq.committed_apply_result(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION dq.committed_apply_result(TEXT) TO dq_apply;
