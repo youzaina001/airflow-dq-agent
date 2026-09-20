@@ -88,18 +88,22 @@ comments.
 
 **Actions UI.** *Actions -> OpenCodeReview PR Review -> Run workflow*. Pick the
 branch that contains the workflow (after merge, `master`), the pull request
-number, and an OpenRouter model from the dropdown. Default model is
-`z-ai/glm-5.3-flash`.
+number, a model, and reasoning effort. Default model is `z-ai/glm-5.3-flash`.
+Default `reasoning_effort` is `low` (fastest; `high` / `max` think longer).
+Dropdown models: `z-ai/glm-5.3-flash`, `z-ai/glm-5.3-flashx`,
+`deepseek/deepseek-v4.1-flash`.
 
 **PR comment.** On a pull request, a MEMBER/OWNER/COLLABORATOR can comment
 `/ocreview`. That is a slash command, not a GitHub @mention, so it does not
 tag a user. Optionally pass a dropdown model id:
-`/ocreview x-ai/grok-4.6`. Any other token after `/ocreview` is ignored and
-the default model is used. Comment triggers use the workflow file on the
-default branch, so they work only after this workflow has landed on `master`.
+`/ocreview z-ai/glm-5.3-flashx`. Any other token after `/ocreview` is ignored
+and the default model is used. Comment runs always use `reasoning_effort=low`.
+Comment triggers use the workflow file on the default branch, so they work
+only after this workflow has landed on `master`.
 
 ```bash
-gh workflow run ocr-review.yml --ref master -f pr_number=81 -f model=z-ai/glm-5.3-flash
+gh workflow run ocr-review.yml --ref master \
+  -f pr_number=81 -f model=z-ai/glm-5.3-flash -f reasoning_effort=low
 ```
 
 Set one secret under **Settings -> Secrets and variables -> Actions**:
@@ -143,10 +147,15 @@ Cost and latency levers, cheapest first:
   still published.
 - `--concurrency <n>` — parallel subtasks (default 8); lower it if OpenRouter
   rate-limits, raise it for many-file diffs.
-- Model dropdown on `workflow_dispatch` (or `/ocreview <model>` on a PR) — point CI
-  at a faster model without editing the workflow.
+- `reasoning_effort=low` on `workflow_dispatch` — GLM-5.3-Flash cannot disable
+  thinking; the default is `max`. `low` is the closest analogue to Alibaba's
+  `enable_thinking: false`.
+- Model dropdown on `workflow_dispatch` (or `/ocreview <model>` on a PR) —
+  `z-ai/glm-5.3-flash`, `z-ai/glm-5.3-flashx`, or `deepseek/deepseek-v4.1-flash`.
 
-The CI job has `timeout-minutes: 30`; raise it for large PRs.
+The CI job has `timeout-minutes: 60` and `review_task_timeout: 30` (per
+group). Raise both if a grouped OpenRouter review still classifies files as
+`timeout`. Keep the job cap above the per-group deadline.
 
 ## Notes and limits
 
