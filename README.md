@@ -218,6 +218,25 @@ Open `http://localhost:8080` and sign in with `airflow` / `airflow`. The `dq_dai
 is paused when created. `make integration` exercises the Postgres path, and
 `make compose-smoke` runs the deterministic Compose verification.
 
+## AI code review
+
+Local review runs through OpenCodeReview (`ocr`) with OpenRouter
+(`z-ai/glm-5.3-flash`). On GitHub, start a PR review from Actions (*Run
+workflow*, pick the PR and model) or by commenting `/ocreview` on the pull request.
+Findings are advisory: the deterministic loop and human review remain the
+authority.
+
+```bash
+make review-preview   # files OCR would review (no LLM call)
+make review           # review the workspace diff
+make review-branch    # review the current branch against origin/master
+```
+
+Project rules live in `.opencodereview/rule.json`, and the PR workflow is
+`.github/workflows/ocr-review.yml`. See
+[docs/ocr-code-review.md](docs/ocr-code-review.md) for setup, the
+`OPENROUTER_API_KEY` secret, and cost controls.
+
 ## Deterministic evaluation cases
 
 - A failed uniqueness check does not authorize `DROP TABLE fact_orders`. The evaluator
