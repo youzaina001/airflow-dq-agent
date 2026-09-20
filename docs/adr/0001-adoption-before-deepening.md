@@ -17,3 +17,5 @@ Milestone 5 still required configured shadow (#68) to wait on fingerprint and au
 - The product has two callers: CLI for Shadow Review, Airflow for Human Decision and apply. #68 exists so those callers do not drift.
 - A live model is an optional Candidate Proposal source behind the same seam. Stub is the default and the adoption path. #6 is not this stretch.
 - Adoption is proven only when #29, #42, and #69 are green: committed retry, Airflow crash/retry with a single copy, and a CLI Shadow Review of an adopter registry without DAG source edits. Until then, do not start #10 or remaining #52 deepening as a new bet.
+- PostgreSQL is the product warehouse. `TargetSetResolver` is an internal test fake, not a public port. Do not start a second warehouse adapter.
+- Distinct read, audit, and apply PostgreSQL logins are the adopter contract, not a demo. Shadow Review uses read and audit; apply stays off. Pointing all three at a superuser is not success.
