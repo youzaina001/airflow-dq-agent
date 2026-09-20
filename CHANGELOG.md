@@ -6,7 +6,9 @@
 
 - OpenCodeReview job timeout is 60 minutes and the per-group review
   deadline is 30 minutes, so grouped OpenRouter reviews are less likely
-  to abort as `timeout`.
+  to abort as `timeout`. The dispatch dropdown is `z-ai/glm-5.3-flash`,
+  `z-ai/glm-5.3-flashx`, and `deepseek/deepseek-v4.1-flash`, with a
+  `reasoning_effort` input (default `low`).
 
 ### Added
 

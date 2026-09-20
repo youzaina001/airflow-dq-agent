@@ -6,8 +6,9 @@
 #
 # Start a review from Actions -> OpenCodeReview PR Review -> Run workflow
 # (PR number + model dropdown), or by commenting /ocreview on a pull request.
-# `/ocreview <openrouter-model-id>` uses that model when it is in the dropdown;
-# otherwise the default is z-ai/glm-5.3-flash. Not a GitHub mention.
+# `/ocreview <openrouter-model-id>` uses that model when it is in the dropdown
+# (z-ai/glm-5.3-flash, z-ai/glm-5.3-flashx, or deepseek/deepseek-v4.1-flash); otherwise the default
+# is z-ai/glm-5.3-flash. Comment runs use reasoning_effort=low. Not a GitHub mention.
 #
 # Pilot note: the review step sets `continue-on-error: true`, so findings are
 # advisory and never block a merge. Remove that line once precision is trusted.
@@ -33,11 +34,16 @@ on:
         options:
           - z-ai/glm-5.3-flash
           - z-ai/glm-5.3-flashx
-          - google/gemini-3.8-flash
-          - qwen/qwen3.8-flash
-          - anthropic/claude-sonnet-5
-          - x-ai/grok-4.6
-          - openai/gpt-6-astra
+          - deepseek/deepseek-v4.1-flash
+      reasoning_effort:
+        description: GLM/DeepSeek reasoning depth (low is fastest)
+        required: true
+        type: choice
+        default: low
+        options:
+          - low
+          - high
+          - max
   issue_comment:
     types: [created]
 
@@ -71,20 +77,21 @@ jobs:
             const allowed = [
               'z-ai/glm-5.3-flash',
               'z-ai/glm-5.3-flashx',
-              'google/gemini-3.8-flash',
-              'qwen/qwen3.8-flash',
-              'anthropic/claude-sonnet-5',
-              'x-ai/grok-4.6',
-              'openai/gpt-6-astra',
+              'deepseek/deepseek-v4.1-flash',
             ];
+            const allowedEffort = ['low', 'high', 'max'];
             const defaultModel = 'z-ai/glm-5.3-flash';
+            const defaultEffort = 'low';
             let prNumber;
             let model = defaultModel;
+            let reasoningEffort = defaultEffort;
 
             if (context.eventName === 'workflow_dispatch') {
               prNumber = Number(context.payload.inputs.pr_number);
               const chosen = context.payload.inputs.model;
               if (allowed.includes(chosen)) model = chosen;
+              const chosenEffort = context.payload.inputs.reasoning_effort;
+              if (allowedEffort.includes(chosenEffort)) reasoningEffort = chosenEffort;
             } else {
               const body = context.payload.comment.body || '';
               const mention = body.match(/(^|\s)\/ocreview(?:\s+(\S+))?/i);
@@ -111,6 +118,7 @@ jobs:
             core.setOutput('base_ref', pullRequest.base.ref);
             core.setOutput('head_sha', pullRequest.head.sha);
             core.setOutput('model', model);
+            core.setOutput('reasoning_effort', reasoningEffort);
             core.setOutput('skip', 'false');
 
       - name: Run OpenCodeReview
@@ -128,6 +136,7 @@ jobs:
           # Send no vendor-specific body fields. The action default would add
           # {"thinking":{"type":"disabled"}}, which OpenRouter need not accept.
           llm_extra_body: '{}'
+          llm_reasoning_effort: ${{ steps.pr-context.outputs.reasoning_effort }}
           # Per-group deadline. Action default is 15; OpenRouter grouped
           # reviews on this repo exceeded that (8/12 files on PR #80).
           # Keep the job timeout above this value.

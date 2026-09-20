@@ -7,12 +7,10 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ocr-review.y
 ALLOWED_MODELS = [
     "z-ai/glm-5.3-flash",
     "z-ai/glm-5.3-flashx",
-    "google/gemini-3.8-flash",
-    "qwen/qwen3.8-flash",
-    "anthropic/claude-sonnet-5",
-    "x-ai/grok-4.6",
-    "openai/gpt-6-astra",
+    "deepseek/deepseek-v4.1-flash",
 ]
+
+ALLOWED_REASONING_EFFORT = ["low", "high", "max"]
 
 
 def _load_workflow() -> dict:
@@ -38,6 +36,11 @@ def test_ocr_review_workflow_is_manual_with_model_choice() -> None:
     assert model["default"] == "z-ai/glm-5.3-flash"
     assert model["options"] == ALLOWED_MODELS
 
+    effort = dispatch["reasoning_effort"]
+    assert effort["type"] == "choice"
+    assert effort["default"] == "low"
+    assert effort["options"] == ALLOWED_REASONING_EFFORT
+
     assert "issue_comment" in triggers
     job_if = workflow["jobs"]["code-review"]["if"]
     assert "/ocreview" in job_if
@@ -52,3 +55,6 @@ def test_ocr_review_timeouts_cover_grouped_openrouter_reviews() -> None:
     assert job["timeout-minutes"] == 60
     step = next(s for s in job["steps"] if s.get("name") == "Run OpenCodeReview")
     assert str(step["with"]["review_task_timeout"]) == "30"
+    assert (
+        step["with"]["llm_reasoning_effort"] == "${{ steps.pr-context.outputs.reasoning_effort }}"
+    )
