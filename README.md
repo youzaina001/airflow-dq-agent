@@ -222,7 +222,7 @@ is paused when created. `make integration` exercises the Postgres path, and
 
 Local review runs through OpenCodeReview (`ocr`) with OpenRouter
 (`z-ai/glm-5.3-flash`). On GitHub, start a PR review from Actions (*Run
-workflow*, pick the PR and model) or by commenting `OCReview` on the pull request.
+workflow*, pick the PR and model) or by commenting `/ocreview` on the pull request.
 Findings are advisory: the deterministic loop and human review remain the
 authority.
 
