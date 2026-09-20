@@ -13,7 +13,7 @@ Milestone 5 still required configured shadow (#68) to wait on fingerprint and au
 
 - #68 is not blocked on #61. It must not add a fingerprint mixin, durable-projection module, or Audit Trail facade.
 - #52 remains the architecture reference; it is not the critical path for this stretch.
-- PR #77 (#29) stays open until an explicit merge decision.
+- Committed-result recovery (#29) landed via PR #77 (`46dfd74`). The next gate is Airflow crash/retry (#42, PR #80), then thin sequencing (#68), then configured shadow (#69).
 - Until this adoption stretch is proven, apply is quarantine-only: a Human Decision authorizes a copy of the Remediation Target Set, not source repair. `null_fill` (#10) stays parked.
 - The product has two callers: CLI for Shadow Review, Airflow for Human Decision and apply. The Airflow HITL/apply proof is `examples/dq_external_invoice.py`. `dags/dq_daily.py` is the synthetic demo; #76 stays parked. #68 still sequences both Airflow modules plus the CLI so they do not drift.
 - A live model is an optional Candidate Proposal source behind the same seam. Stub is the default and the adoption path. #6 is not this stretch.

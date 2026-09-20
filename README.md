@@ -3,8 +3,9 @@
 A data-quality remediation workflow for Apache Airflow 3. Deterministic checks identify
 failures; a stub, replay, or optional live LLM proposes allow-listed action IDs; and
 deterministic policy decides what may run. The model never supplies executable SQL,
-target keys, table names, or values. The package includes the `dq-agent` CLI and the
-`dq_daily` Airflow DAG.
+target keys, table names, or values. The package includes the `dq-agent` CLI,
+`dags/dq_daily.py` as the synthetic demo, and `examples/dq_external_invoice.py` as
+the Airflow HITL/apply proof.
 
 ## End-to-end workflow
 
@@ -24,7 +25,7 @@ flowchart TD
   plan_eval -->|pass and APPLY_MODE=hitl| hitl[Audited Airflow approval]
   hitl -->|reject or timeout| stopped
   hitl -->|approve| admission[Time-bounded whole-plan admission]
-  admission --> apply[Recheck policy, lock targets, and compare fingerprints]
+  admission --> apply[Recheck policy and target fingerprints under SERIALIZABLE isolation]
   apply --> execute[Render and execute controlled steps in one transaction]
   execute --> result[Audit apply result]
 
@@ -65,7 +66,7 @@ same governed lifecycle.
 | Read catalog, samples, and observed schema | Available to the proposer | Fixed registries and bounded samples; no ad-hoc SQL |
 | Propose | Untrusted | Action IDs and report-scoped evidence only |
 | Compile | Deterministic | Check Policy supplies reviewed rules; the action derives and validates inputs |
-| Apply | Disabled by default | Passing eval, audited approval, admission, policy check, target lock, and transaction |
+| Apply | Disabled by default | Passing eval, audited approval, Apply Admission, policy and target rechecks in a SERIALIZABLE transaction |
 
 ## Modes
 
@@ -215,9 +216,13 @@ make up
 make seed
 ```
 
-Open `http://localhost:8080` and sign in with `airflow` / `airflow`. The `dq_daily` DAG
-is paused when created. `make integration` exercises the Postgres path, and
-`make compose-smoke` runs the deterministic Compose verification.
+Open `http://localhost:8080` and sign in with `airflow` / `airflow`. For HITL/apply,
+copy `examples/dq_external_invoice.py` into `dags/` and follow the
+[external invoice setup](#external-invoice-example-restricted-credentials) for
+restricted credentials and approval configuration. The synthetic `dq_daily` DAG
+is paused when created and remains the `make compose-smoke` demo.
+`make integration` exercises the Postgres path; `make compose-hitl` runs the
+real-Airflow reject, timeout, and crash/retry proof.
 
 ## AI code review
 
@@ -252,7 +257,7 @@ These cases test the authority boundary independently of model quality or SQL sy
 There is no `SQLToolset.query`. Live mode exposes only catalog reads, fixed check
 sampling with a bounded limit, and observed-schema reads. Missing credentials, transport
 errors, replay errors, malformed output, failed evaluations, rejected approvals, and
-expired admissions fail closed.
+unconsumed expired Apply Admissions fail closed.
 
 The v1 remediation catalog is deliberately small. Quarantine actions copy affected rows
 into `dq.quarantine_rows`; they do not delete source rows. `dq.quarantine_rows.payload`
@@ -260,8 +265,15 @@ copies source rows and is not covered by sample-free XCom or Audit Lineage guara
 `null_fill` is registered but unavailable until a reviewed Check Policy supplies both a
 target rule and fill value.
 Every executable plan item records the exact primary-key target count and fingerprint.
-Apply recomputes and locks the same set in its transaction; target drift, policy drift,
-or an expired admission aborts the operation.
+Apply rechecks the Remediation Target Set and its fingerprint in a SERIALIZABLE
+transaction, so the target snapshot cannot expand. The restricted `dq_apply` role
+cannot use `FOR SHARE` or `FOR UPDATE` on source rows. Target drift, policy drift,
+or an unconsumed expired Apply Admission aborts the operation.
+
+After PostgreSQL commits, retrying the same Apply Admission returns the original
+committed apply result with the same identity and counts, leaving one quarantine
+copy. Recovery is read-only, including after expiry; it cannot authorize a second
+mutation or a different plan or report.
 
 Audit lineage uses `quality_run_id` as its root and immutable IDs for the report,
 candidate, plan, evaluation, decision, admission, and apply result. Postgres is required
@@ -302,9 +314,10 @@ src/airflow_dq_agent/
   warehouse/             # DSN/engine helpers (no demo schema)
   demo/                  # optional synthetic warehouse, seed, fixtures, and catalog MCP
   load.py                # YAML registry loader
-dags/dq_daily.py         # Airflow TaskFlow orchestration and HITL boundary
+dags/dq_daily.py         # synthetic Airflow demo used by compose-smoke
 evals/cases/             # portable deterministic evaluation cases
 examples/                # adopter YAML, external-invoice DAG, and registration example
+  dq_external_invoice.py # Airflow HITL/apply proof with restricted credentials
 ```
 
 The scope is detection, typed proposals, deterministic evaluation, audited approval,
@@ -317,11 +330,16 @@ stage.
 in stub/shadow mode, seeds the warehouse, runs `dq_daily`, and verifies persisted lineage
 and zero quarantine rows.
 
-Before a release or demo, manually verify approval and rejection with
-`APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed `HITL_APPROVER_IDS` user.
-An approval requires a non-empty note. Rejection and timeout must create distinct audit
-outcomes, and an approval must create a fresh whole-plan admission that cannot authorize
-a different plan.
+`make compose-hitl` runs the real-Airflow HITL/apply proof using
+`examples/dq_external_invoice.py` with restricted read, audit, and apply credentials:
+
+- `scripts/compose-hitl-reject-timeout.sh` verifies distinct rejection and timeout
+  Audit Lineage outcomes with no quarantine copies.
+- `scripts/compose-hitl-crash-retry.sh` approves, crashes the apply task after
+  PostgreSQL commits, and verifies that the retry returns the original committed
+  apply result with one quarantine copy of invoices 102 and 104.
+
+A skipped PostgreSQL or Airflow run is not a successful runtime proof.
 
 For an opt-in live-model smoke test, use sanitized seeded data with `LLM_MODE=live` and
 `APPLY_MODE=off`. The run may propose, compile, evaluate, and audit, but cannot create an
