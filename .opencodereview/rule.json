@@ -53,7 +53,7 @@
     {
       "path": "dags/**/*.py",
       "merge_system_rule": true,
-      "rule": "The DAG is the HITL boundary and must not leak row data through XCom. Use `sample_free_report` for suite output and `safe_proposal_for_xcom` for proposals; XCom payloads must never contain `sample_failures`, sampled values, unknown fields, or model-authored text. Keep suite, compiler, HITL/audit, and apply bound to their separate least-privilege DSNs (READ_DSN, AUDIT_DSN, APPLY_DSN). Approval requires an attributable, allow-listed approver and a non-empty note; rejection and timeout must produce distinct audit outcomes. Safe defaults remain LLM_MODE=stub and APPLY_MODE=off."
+      "rule": "The DAG is the HITL boundary and must not leak row data through XCom. Use `sample_free_report` for suite output and `safe_proposal_for_xcom` for proposals; XCom payloads must never contain `sample_failures`, sampled values, unknown fields, or model-authored text. Keep suite, compiler, HITL/audit, and apply bound to their separate least-privilege DSNs (READ_DSN, AUDIT_DSN, APPLY_DSN). A Human Decision requires an attributable, allow-listed actor and a non-empty note; rejection and timeout must produce distinct audit outcomes. Safe defaults remain LLM_MODE=stub and APPLY_MODE=off."
     },
     {
       "path": "src/airflow_dq_agent/contracts/**",

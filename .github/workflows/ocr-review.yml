@@ -93,9 +93,11 @@ jobs:
 
       - name: Run OpenCodeReview
         # Pinned to v1.12.7 (commit 85cecfe) instead of the moving @main ref.
+        # ocr_version pins the npm CLI the action installs (default is latest).
         uses: alibaba/open-code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681
         continue-on-error: true
         with:
+          ocr_version: '1.12.7'
           llm_url: https://openrouter.ai/api/v1
           llm_auth_token: ${{ secrets.OPENROUTER_API_KEY }}
           llm_model: ${{ vars.OCR_LLM_MODEL || 'z-ai/glm-5.3-flash' }}

@@ -24,6 +24,7 @@ help:
 	@echo "make check     - lint, typecheck, and unit tests"
 	@echo "make catalog   - run the bundled demo FastMCP catalog server"
 	@echo "make compose-smoke - deterministic stub/shadow Compose DAG smoke test"
+	@echo "make compose-hitl  - actual Airflow Reject/Timeout zero-quarantine proof"
 	@echo "make review-preview - list files OCR would review (no LLM call)"
 	@echo "make review    - AI-review the workspace diff via OpenCodeReview"
 	@echo "make review-branch - AI-review the current branch vs origin/master"
