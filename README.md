@@ -22,7 +22,7 @@ flowchart TD
   plan --> plan_eval[Plan evaluation]
   plan_eval -->|blocked or fail| stopped
   plan_eval -->|pass and APPLY_MODE=off| shadow[Audit and stop in shadow mode]
-  plan_eval -->|pass and APPLY_MODE=hitl| hitl[Audited Airflow approval]
+  plan_eval -->|pass and APPLY_MODE=hitl| hitl[Airflow Human Decision]
   hitl -->|reject or timeout| stopped
   hitl -->|approve| admission[Time-bounded whole-plan admission]
   admission --> apply[Recheck policy and target fingerprints under SERIALIZABLE isolation]
@@ -38,7 +38,7 @@ flowchart TD
 ```
 
 The safe defaults are `LLM_MODE=stub` and `APPLY_MODE=off`: no live model call, no
-approval request, and no mutation. A Candidate Proposal is untrusted input. It becomes
+Human Decision request, and no mutation. A Candidate Proposal is untrusted input. It becomes
 an executable Remediation Plan only when it covers the failed checks and every requested
 action is allowed by the corresponding check policy.
 
@@ -66,7 +66,7 @@ same governed lifecycle.
 | Read catalog, samples, and observed schema | Available to the proposer | Fixed registries and bounded samples; no ad-hoc SQL |
 | Propose | Untrusted | Action IDs and report-scoped evidence only |
 | Compile | Deterministic | Check Policy supplies reviewed rules; the action derives and validates inputs |
-| Apply | Disabled by default | Passing eval, audited approval, Apply Admission, policy and target rechecks in a SERIALIZABLE transaction |
+| Apply | Disabled by default | Passing eval, Human Decision, Apply Admission, policy and target rechecks in a SERIALIZABLE transaction |
 
 ## Modes
 
@@ -76,7 +76,7 @@ same governed lifecycle.
 | `LLM_MODE=replay` | Revalidates a recorded proposal | No |
 | `LLM_MODE=live` | Optional model with catalog, bounded-sample, and schema reads | No authority by itself |
 | `APPLY_MODE=off` | Evaluates and audits, then stops | No |
-| `APPLY_MODE=hitl` | Enables audited approval and admission for a passing plan | Only through controlled apply |
+| `APPLY_MODE=hitl` | Enables Human Decision and Apply Admission for a passing plan | Only through controlled apply |
 
 See [`.env.example`](.env.example) for the complete local configuration. Production
 deployments should supply separate least-privilege read, audit, and apply DSNs.
@@ -188,7 +188,7 @@ credentials = provision_restricted_logins(owner_dsn)
    | Outcome | How to exercise | `dq.quarantine_rows` | Source `warehouse.ext_invoice` | Audit Lineage |
    | --- | --- | --- | --- | --- |
    | Approve | Required Actions: choose Approve and a non-empty note | Copies missing-amount ids 102 and 104 | Unchanged (101/103 keep amounts; 102/104 stay NULL) | `human_approved` then `apply_succeeded` |
-   | Crash after commit | Approve, then lose the apply task after PostgreSQL commits (`scripts/compose-hitl-crash-retry.sh`) | Copies missing-amount ids 102 and 104 **once** | Unchanged | `human_approved` then one `apply_succeeded`; Airflow retry returns the original committed result, not a consumed-admission failure |
+   | Crash after commit | Approve, then lose the apply task after PostgreSQL commits (`scripts/compose-hitl-crash-retry.sh`) | Copies missing-amount ids 102 and 104 **once** | Unchanged | `human_approved` then one `apply_succeeded`; Airflow retry returns the original committed result, not a second mutation |
    | Reject | Required Actions: choose Reject | Empty for that run | Unchanged | `human_rejected`; no `apply_succeeded` |
    | Timeout | Do not respond before `DQ_HITL_TIMEOUT_SECONDS` (default 86400). Pinned `apache-airflow-providers-standard==1.12.1` uses `execution_timeout`, not `response_timeout`. | Empty for that run | Unchanged | `human_timed_out` with actor `airflow-timeout`; not an approval |
 
@@ -219,7 +219,7 @@ make seed
 Open `http://localhost:8080` and sign in with `airflow` / `airflow`. For HITL/apply,
 copy `examples/dq_external_invoice.py` into `dags/` and follow the
 [external invoice setup](#external-invoice-example-restricted-credentials) for
-restricted credentials and approval configuration. The synthetic `dq_daily` DAG
+restricted credentials and the Human Decision allow-list. The synthetic `dq_daily` DAG
 is paused when created and remains the `make compose-smoke` demo.
 `make integration` exercises the Postgres path; `make compose-hitl` runs the
 real-Airflow reject, timeout, and crash/retry proof.
@@ -256,7 +256,7 @@ These cases test the authority boundary independently of model quality or SQL sy
 
 There is no `SQLToolset.query`. Live mode exposes only catalog reads, fixed check
 sampling with a bounded limit, and observed-schema reads. Missing credentials, transport
-errors, replay errors, malformed output, failed evaluations, rejected approvals, and
+errors, replay errors, malformed output, failed evaluations, rejected Human Decisions, and
 unconsumed expired Apply Admissions fail closed.
 
 The v1 remediation catalog is deliberately small. Quarantine actions copy affected rows
@@ -320,7 +320,7 @@ examples/                # adopter YAML, external-invoice DAG, and registration 
   dq_external_invoice.py # Airflow HITL/apply proof with restricted credentials
 ```
 
-The scope is detection, typed proposals, deterministic evaluation, audited approval,
+The scope is detection, typed proposals, deterministic evaluation, Human Decision,
 and controlled remediation. The authority boundary is explicit and testable at every
 stage.
 

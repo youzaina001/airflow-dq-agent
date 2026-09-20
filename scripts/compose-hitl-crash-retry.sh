@@ -18,6 +18,7 @@ DAILY_DAG="dags/dq_daily.py"
 DAILY_BAK=""
 API="http://localhost:8080"
 HITL_TASK="approve_remediation_plan"
+ADMIT_TASK="admit_apply_task"
 APPLY_TASK="apply_after_admission_task"
 DAG_ID="dq_external_invoice"
 MARKER_HOST="traces/.apply-crash-once"
@@ -103,6 +104,26 @@ split_body_code() {
   local payload="$1"
   HTTP_CODE="$(printf '%s' "$payload" | tail -n1)"
   HTTP_BODY="$(printf '%s' "$payload" | sed '$d')"
+}
+
+xcom_field() {
+  local task_id="$1" field="$2"
+  api_curl -H "$auth_header" \
+    "$API/api/v2/dags/${DAG_ID}/dagRuns/${crash_run}/taskInstances/${task_id}/xcomEntries/return_value" \
+    | python3 -c '
+import json, sys
+field = sys.argv[1]
+payload = json.load(sys.stdin)
+value = payload.get("value")
+if isinstance(value, str):
+    try:
+        value = json.loads(value)
+    except json.JSONDecodeError:
+        value = {}
+if not isinstance(value, dict):
+    raise SystemExit("xcom value is not an object")
+print(value.get(field) or "")
+' "$field"
 }
 
 api_ready() {
@@ -253,21 +274,42 @@ test "$(
 )" = "102,104"
 test "$(
   psql_wh "SELECT count(*) FROM dq.traces WHERE kind = 'human_approved' AND body ->> 'quality_run_id' = '$crash_qid'"
-)" -ge 1
+)" -eq 1
 test "$(
   psql_wh "SELECT count(*) FROM dq.traces WHERE kind = 'apply_succeeded' AND body ->> 'quality_run_id' = '$crash_qid'"
 )" -eq 1
 test "$(
   psql_wh "SELECT count(*) FROM dq.traces WHERE kind = 'apply_failed' AND body ->> 'quality_run_id' = '$crash_qid'"
 )" -eq 0
-test "$(psql_wh "SELECT count(*) FROM dq.apply_log")" -eq 1
+
+admission_id="$(xcom_field "$ADMIT_TASK" admission_id)"
+apply_admission_id="$(xcom_field "$APPLY_TASK" admission_id)"
+apply_xcom_result_id="$(xcom_field "$APPLY_TASK" apply_result_id)"
+apply_xcom_event_id="$(xcom_field "$APPLY_TASK" audit_event_id)"
+test -n "$admission_id"
+test "$apply_admission_id" = "$admission_id"
+test -n "$apply_xcom_result_id"
+test -n "$apply_xcom_event_id"
+
+test "$(
+  psql_wh "SELECT count(*) FROM dq.apply_log WHERE admission_id = '$admission_id'"
+)" -eq 1
 
 committed_id="$(
   psql_wh "SELECT body ->> 'apply_result_id' FROM dq.traces WHERE kind = 'apply_succeeded' AND body ->> 'quality_run_id' = '$crash_qid' ORDER BY seq DESC LIMIT 1"
 )"
+committed_event_id="$(
+  psql_wh "SELECT body ->> 'event_id' FROM dq.traces WHERE kind = 'apply_succeeded' AND body ->> 'quality_run_id' = '$crash_qid' ORDER BY seq DESC LIMIT 1"
+)"
+apply_log_event_id="$(
+  psql_wh "SELECT event_id FROM dq.apply_log WHERE admission_id = '$admission_id'"
+)"
 marker_id="$(cat "$MARKER_HOST")"
 test -n "$committed_id"
 test "$marker_id" = "$committed_id"
+test "$apply_xcom_result_id" = "$committed_id"
+test "$apply_log_event_id" = "$committed_event_id"
+test "$apply_xcom_event_id" = "$committed_event_id"
 
 docker compose exec -T airflow-scheduler python - <<PY
 import os

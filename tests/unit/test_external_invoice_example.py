@@ -329,3 +329,25 @@ def test_documentation_describes_airflow_crash_retry_of_committed_quarantine() -
     )
     assert "DQ_COMPOSE_CRASH" not in executor
     assert "SIGKILL" not in executor
+
+
+def test_readme_uses_human_decision_and_apply_admission_not_approval_aliases() -> None:
+    readme = README.read_text(encoding="utf-8")
+    lowered = readme.lower()
+    assert "audited approval" not in lowered
+    assert "approval configuration" not in lowered
+    assert "consumed-admission failure" not in lowered
+    assert "Human Decision" in readme
+    assert "Apply Admission" in readme
+
+
+def test_crash_retry_proof_binds_admission_xcom_and_apply_log_identity() -> None:
+    script = (REPO / "scripts" / "compose-hitl-crash-retry.sh").read_text(encoding="utf-8")
+    assert "admit_apply_task" in script
+    assert "apply_after_admission_task" in script
+    assert "xcomEntries/return_value" in script
+    assert "admission_id" in script
+    assert "apply_result_id" in script
+    assert "-ge 1" not in script
+    assert "FROM dq.apply_log WHERE admission_id" in script
+    assert "body ->> 'apply_result_id'" in script
