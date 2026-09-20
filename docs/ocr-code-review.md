@@ -146,7 +146,9 @@ Cost and latency levers, cheapest first:
 - Model dropdown on `workflow_dispatch` (or `/ocreview <model>` on a PR) — point CI
   at a faster model without editing the workflow.
 
-The CI job has `timeout-minutes: 30`; raise it for large PRs.
+The CI job has `timeout-minutes: 60` and `review_task_timeout: 30` (per
+group). Raise both if a grouped OpenRouter review still classifies files as
+`timeout`. Keep the job cap above the per-group deadline.
 
 ## Notes and limits
 

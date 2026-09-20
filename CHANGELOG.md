@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- OpenCodeReview job timeout is 60 minutes and the per-group review
+  deadline is 30 minutes, so grouped OpenRouter reviews are less likely
+  to abort as `timeout`.
+
 ### Added
 
 - OpenCodeReview (`ocr`) integration: project review rules in

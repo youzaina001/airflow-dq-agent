@@ -44,3 +44,11 @@ def test_ocr_review_workflow_is_manual_with_model_choice() -> None:
     assert "@ocr" not in job_if
     assert "OCReview" not in job_if
     assert "workflow_dispatch" in job_if
+
+
+def test_ocr_review_timeouts_cover_grouped_openrouter_reviews() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["code-review"]
+    assert job["timeout-minutes"] == 60
+    step = next(s for s in job["steps"] if s.get("name") == "Run OpenCodeReview")
+    assert str(step["with"]["review_task_timeout"]) == "30"
