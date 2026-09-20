@@ -8,8 +8,9 @@ export APPLY_MODE ?= off
 export AIRFLOW_UID
 export WAREHOUSE_DSN ?= postgresql+psycopg://dq:dq@localhost:5433/warehouse
 export TRACES_DIR ?= traces
+OCR ?= ocr
 
-.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install ci catalog compose-smoke compose-hitl
+.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install ci catalog compose-smoke review-preview review review-branch compose-hitl
 
 help:
 	@echo "make install   - editable install with dev extras (no Airflow)"
@@ -23,7 +24,9 @@ help:
 	@echo "make check     - lint, typecheck, and unit tests"
 	@echo "make catalog   - run the bundled demo FastMCP catalog server"
 	@echo "make compose-smoke - deterministic stub/shadow Compose DAG smoke test"
-	@echo "make compose-hitl  - actual Airflow Reject/Timeout zero-quarantine proof"
+	@echo "make review-preview - list files OCR would review (no LLM call)"
+	@echo "make review    - AI-review the workspace diff via OpenCodeReview"
+	@echo "make review-branch - AI-review the current branch vs origin/master"
 	@echo "make lint fmt typecheck ci"
 
 install:
@@ -83,3 +86,14 @@ ci: lint typecheck test eval
 
 integration:
 	$(PYTHON) -m pytest tests/integration -q --tb=short
+
+# AI code review (OpenCodeReview). Setup and SDLC guidance: docs/ocr-code-review.md.
+# These targets call the configured LLM; review-preview does not.
+review-preview:
+	$(OCR) review --preview
+
+review:
+	$(OCR) review
+
+review-branch:
+	$(OCR) review --from origin/master --to HEAD

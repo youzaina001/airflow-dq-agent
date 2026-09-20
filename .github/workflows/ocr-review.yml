@@ -1,0 +1,107 @@
+# OpenCodeReview — AI PR review via OpenRouter (z-ai/glm-5.3-flash).
+# Setup and SDLC guidance: docs/ocr-code-review.md
+#
+# Required secret (Settings -> Secrets and variables -> Actions):
+#   OPENROUTER_API_KEY   OpenRouter API key (sk-or-...)
+# Optional repository variable:
+#   OCR_LLM_MODEL        override the model (defaults to z-ai/glm-5.3-flash)
+#
+# Pilot note: the review step sets `continue-on-error: true`, so findings are
+# advisory and never block a merge. Remove that line once precision is trusted.
+
+name: OpenCodeReview PR Review
+
+# Conditional concurrency group: matching events (PR events and trigger
+# comments) share a per-PR group so a new review cancels a stale one; every
+# other comment lands in a unique noop group and is skipped instantly.
+concurrency:
+  group: >-
+    ${{
+      (
+        github.event_name == 'pull_request_target'
+        || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.comment.user.type != 'Bot'
+          && (
+            github.event.comment.author_association == 'MEMBER'
+            || github.event.comment.author_association == 'OWNER'
+            || github.event.comment.author_association == 'COLLABORATOR'
+          )
+          && (
+            startsWith(github.event.comment.body, '/open-code-review')
+            || startsWith(github.event.comment.body, '@open-code-review')
+          )
+        )
+      )
+      && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
+      || format('noop-{0}', github.run_id)
+    }}
+  cancel-in-progress: true
+
+on:
+  # pull_request_target keeps secrets available for fork PRs. OCR only reads
+  # the diff through the API and does not execute code from the PR.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Run on PR events, or on human-authored trigger comments from
+    # MEMBER/OWNER/COLLABORATOR users so only trusted reviewers spend LLM quota.
+    if: |
+      github.event_name == 'pull_request_target'
+      || (
+        github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.type != 'Bot'
+        && (
+          github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+        )
+        && (
+          startsWith(github.event.comment.body, '/open-code-review')
+          || startsWith(github.event.comment.body, '@open-code-review')
+        )
+      )
+    steps:
+      - name: Get PR context
+        id: pr-context
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // issue_comment payloads have no top-level pull_request fields, so
+            // resolve the PR base/head for the review range.
+            const prNumber = context.issue.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('base_ref', pullRequest.base.ref);
+            core.setOutput('head_sha', pullRequest.head.sha);
+
+      - name: Run OpenCodeReview
+        # Pinned to v1.12.7 (commit 85cecfe) instead of the moving @main ref.
+        uses: alibaba/open-code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681
+        continue-on-error: true
+        with:
+          llm_url: https://openrouter.ai/api/v1
+          llm_auth_token: ${{ secrets.OPENROUTER_API_KEY }}
+          llm_model: ${{ vars.OCR_LLM_MODEL || 'z-ai/glm-5.3-flash' }}
+          llm_use_anthropic: 'false'
+          # Send no vendor-specific body fields. The action default would add
+          # {"thinking":{"type":"disabled"}}, which OpenRouter need not accept.
+          llm_extra_body: '{}'
+          base_ref: ${{ steps.pr-context.outputs.base_ref }}
+          head_sha: ${{ steps.pr-context.outputs.head_sha }}

@@ -4,6 +4,10 @@
 
 ### Added
 
+- OpenCodeReview (`ocr`) integration: project review rules in
+  `.opencodereview/rule.json`, `make review*` targets, and an advisory
+  OpenRouter-backed PR workflow (`.github/workflows/ocr-review.yml`). See
+  `docs/ocr-code-review.md`.
 - Packaged external-invoice adopter example: `register_external_invoice`,
   restricted read/audit/apply login provisioning, and
   `examples/dq_external_invoice.py` for Airflow quarantine copies.
