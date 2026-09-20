@@ -220,9 +220,11 @@ is paused when created. `make integration` exercises the Postgres path, and
 
 ## AI code review
 
-Local and PR code review runs through OpenCodeReview (`ocr`) with OpenRouter
-(`z-ai/glm-5.3-flash`). Findings are advisory: the deterministic loop and human
-review remain the authority.
+Local review runs through OpenCodeReview (`ocr`) with OpenRouter
+(`z-ai/glm-5.3-flash`). On GitHub, start a PR review from Actions (*Run
+workflow*, pick the PR and model) or by commenting `@ocr` on the pull request.
+Findings are advisory: the deterministic loop and human review remain the
+authority.
 
 ```bash
 make review-preview   # files OCR would review (no LLM call)

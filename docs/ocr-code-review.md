@@ -80,11 +80,26 @@ ocr review --background "feat(apply): bind admission to a single plan"
 Cost controls: `--effort low|medium|high`, `--max-tokens-budget <n>`,
 `--concurrency <n>`, and `--max-tokens <n>`. `--preview` is always free.
 
-## CI: PR review
+## CI: on-demand PR review
 
-`.github/workflows/ocr-review.yml` runs on PR open/update/reopen and on
-`/open-code-review` or `@open-code-review` comments from MEMBER/OWNER/COLLABORATOR
-users, then posts findings as inline review comments.
+`.github/workflows/ocr-review.yml` does **not** run on push or on PR
+open/update. Start it yourself, then it posts findings as inline review
+comments.
+
+**Actions UI.** *Actions -> OpenCodeReview PR Review -> Run workflow*. Pick the
+branch that contains the workflow (after merge, `master`), the pull request
+number, and an OpenRouter model from the dropdown. Default model is
+`z-ai/glm-5.3-flash`.
+
+**PR comment.** On a pull request, a MEMBER/OWNER/COLLABORATOR can comment
+`@ocr`. Optionally pass a dropdown model id: `@ocr x-ai/grok-4.6`. Any other
+token after `@ocr` is ignored and the default model is used. Comment triggers
+use the workflow file on the default branch, so `@ocr` works only after this
+workflow has landed on `master`.
+
+```bash
+gh workflow run ocr-review.yml --ref master -f pr_number=81 -f model=z-ai/glm-5.3-flash
+```
 
 Set one secret under **Settings -> Secrets and variables -> Actions**:
 
@@ -92,9 +107,9 @@ Set one secret under **Settings -> Secrets and variables -> Actions**:
 | --- | --- |
 | `OPENROUTER_API_KEY` | OpenRouter key (`sk-or-...`) |
 
-Optional repository variable `OCR_LLM_MODEL` overrides the model. The workflow
-pins the action to OCR v1.12.7 and uses `pull_request_target` so fork PRs still
-get secrets; OCR only reads the diff.
+The workflow pins the action to OCR v1.12.7 and the npm CLI via `ocr_version`.
+Manual runs and `@ocr` comments have access to repository secrets; OCR only
+reads the diff.
 
 **Pilot mode.** The review step is `continue-on-error: true`, so findings never
 block a merge. Once precision is trusted, remove that line to make it a soft
@@ -104,7 +119,8 @@ gate, and only then consider failing the job on high-severity findings.
 
 1. **Local, before push** — `make review` (or a `pre-push` hook) to catch issues
    before they cost a CI cycle. `make review-preview` costs nothing.
-2. **PR review** — the workflow above, advisory during the pilot.
+2. **On-demand PR review** — `workflow_dispatch` or `@ocr` on the PR, advisory
+   during the pilot.
 3. **Brownfield audit** — `ocr scan --path <dir>` for code that predates the
    diff-based loop.
 4. **Standards drift** — extend `.opencodereview/rule.json` when a class of
@@ -126,8 +142,8 @@ Cost and latency levers, cheapest first:
   still published.
 - `--concurrency <n>` — parallel subtasks (default 8); lower it if OpenRouter
   rate-limits, raise it for many-file diffs.
-- `OCR_LLM_MODEL` repository variable — point CI at a faster model without
-  touching the workflow.
+- Model dropdown on `workflow_dispatch` (or `@ocr <model>` on a PR) — point CI
+  at a faster model without editing the workflow.
 
 The CI job has `timeout-minutes: 30`; raise it for large PRs.
 
@@ -135,9 +151,9 @@ The CI job has `timeout-minutes: 30`; raise it for large PRs.
 
 - Review findings are a trade-off toward precision: OCR reports fewer false
   positives and misses some real issues. Keep human review.
-- `pull_request_target` keeps secrets available for fork PRs, and OCR only reads
-  the diff through the API. The untrusted part is the diff *content* fed to the
-  model, not code execution; keep rule text and review context free of secrets.
+- The workflow never checks out PR code. OCR reads the diff through the API.
+  The untrusted part is the diff *content* fed to the model, not code
+  execution; keep rule text and review context free of secrets.
 - `continue-on-error: true` is deliberate for the pilot, but it also hides
   genuine failures (a missing key, an OpenRouter outage). Check the workflow log
   while the pilot runs, and remove the line once the review is a real gate.
