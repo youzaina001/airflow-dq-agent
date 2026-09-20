@@ -137,9 +137,11 @@ report = run_quality_suite(dsn)  # your read DSN
 # → evaluate_plan → HITL / apply. The model still never supplies SQL.
 ```
 
-Point `dq_daily` at the same registration before the suite task runs (the bundled
-DAG calls `register_demo()` for the synthetic warehouse). Keep `APPLY_MODE=off`
-until a passing plan should request approval.
+`dags/dq_daily.py` is the synthetic demo (`register_demo()`). Human Decision and
+apply against an adopter table are proven by
+[`examples/dq_external_invoice.py`](examples/dq_external_invoice.py), not by
+swapping that registration into `dq_daily`. Keep `APPLY_MODE=off` until a passing
+plan should request approval.
 
 ## External invoice example (restricted credentials)
 
@@ -173,9 +175,9 @@ credentials = provision_restricted_logins(owner_dsn)
    `dq_apply`. The reader cannot write; the apply account cannot UPDATE/DELETE source
    rows or rewrite `dq.traces`.
 4. Copy [`examples/dq_external_invoice.py`](examples/dq_external_invoice.py) into
-   `dags/` (or replace `register_demo()` in `dags/dq_daily.py` with
-   `register_external_invoice()`). The example DAG binds the suite and compiler to
-   `READ_DSN`, HITL/Audit Lineage to `AUDIT_DSN`, and apply to `APPLY_DSN`.
+   `dags/`. Do not treat editing `register_demo()` in `dags/dq_daily.py` as the
+   HITL/apply path. The example DAG binds the suite and compiler to `READ_DSN`,
+   HITL/Audit Lineage to `AUDIT_DSN`, and apply to `APPLY_DSN`.
 5. Keep `LLM_MODE=stub`. Leave `APPLY_MODE=off` until you intend a Human Decision.
    Then set `APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed
    `HITL_APPROVER_IDS` identity. Unpause `dq_external_invoice`.

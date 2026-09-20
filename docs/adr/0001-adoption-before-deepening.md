@@ -15,7 +15,7 @@ Milestone 5 still required configured shadow (#68) to wait on fingerprint and au
 - #52 remains the architecture reference; it is not the critical path for this stretch.
 - PR #77 (#29) stays open until an explicit merge decision.
 - Until this adoption stretch is proven, apply is quarantine-only: a Human Decision authorizes a copy of the Remediation Target Set, not source repair. `null_fill` (#10) stays parked.
-- The product has two callers: CLI for Shadow Review, Airflow for Human Decision and apply. #68 exists so those callers do not drift.
+- The product has two callers: CLI for Shadow Review, Airflow for Human Decision and apply. The Airflow HITL/apply proof is `examples/dq_external_invoice.py`. `dags/dq_daily.py` is the synthetic demo; #76 stays parked. #68 still sequences both Airflow modules plus the CLI so they do not drift.
 - A live model is an optional Candidate Proposal source behind the same seam. Stub is the default and the adoption path. #6 is not this stretch.
 - Adoption proven for this stretch is a **narrow completeness/quarantine journey**: one table, one primary key, `quarantine_nulls`. The gate is #29, #42, and #69 green. That is not full #65 acceptance. One report root, atomic report/check recording, and event replay stay with #59–#61 after this stretch. Predicate parity (#4) and referenced-contract Policy Snapshot (#32) are outside this claim.
 - #69 Shadow Review must persist PostgreSQL Audit Lineage through the restricted audit login. JSONL-only (`TRACE_POSTGRES=false`) is a local demonstration, not adoption success.

@@ -32,8 +32,8 @@ from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candi
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
 
-# Synthetic warehouse. Adopters replace this with register_external_invoice()
-# (see examples/dq_external_invoice.py) instead of depending on the demo catalog.
+# Synthetic demo warehouse. HITL/apply against an adopter table is
+# examples/dq_external_invoice.py, not this file with a swapped register_*.
 register_demo()
 settings = get_settings()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
