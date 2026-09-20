@@ -15,3 +15,5 @@ Milestone 5 still required configured shadow (#68) to wait on fingerprint and au
 - PR #77 (#29) stays open until an explicit merge decision.
 - Until this adoption stretch is proven, apply is quarantine-only: a Human Decision authorizes a copy of the Remediation Target Set, not source repair. `null_fill` (#10) stays parked.
 - The product has two callers: CLI for Shadow Review, Airflow for Human Decision and apply. #68 exists so those callers do not drift.
+- A live model is an optional Candidate Proposal source behind the same seam. Stub is the default and the adoption path. #6 is not this stretch.
+- Adoption is proven only when #29, #42, and #69 are green: committed retry, Airflow crash/retry with a single copy, and a CLI Shadow Review of an adopter registry without DAG source edits. Until then, do not start #10 or remaining #52 deepening as a new bet.
