@@ -13,3 +13,5 @@ Milestone 5 still required configured shadow (#68) to wait on fingerprint and au
 - #68 is not blocked on #61. It must not add a fingerprint mixin, durable-projection module, or Audit Trail facade.
 - #52 remains the architecture reference; it is not the critical path for this stretch.
 - PR #77 (#29) stays open until an explicit merge decision.
+- Until this adoption stretch is proven, apply is quarantine-only: a Human Decision authorizes a copy of the Remediation Target Set, not source repair. `null_fill` (#10) stays parked.
+- The product has two callers: CLI for Shadow Review, Airflow for Human Decision and apply. #68 exists so those callers do not drift.
