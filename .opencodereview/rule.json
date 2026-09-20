@@ -1,0 +1,79 @@
+{
+  "include": [
+    "src/**/*.py",
+    "dags/**/*.py",
+    "tests/**/*.py",
+    "examples/**/*.py",
+    ".github/workflows/**/*.yml",
+    "README.md",
+    "CONTEXT.md",
+    "docs/**/*.md"
+  ],
+  "exclude": [
+    "uv.lock",
+    "**/*.lock",
+    "**/*.jsonl",
+    "traces/**",
+    "logs/**",
+    "evals/fixtures/**",
+    "**/__pycache__/**",
+    ".aider*"
+  ],
+  "rules": [
+    {
+      "path": "src/airflow_dq_agent/agent/**",
+      "merge_system_rule": true,
+      "rule": "The live proposer is the only model-facing path and MUST stay read-only: catalog reads, bounded check sampling, and observed-schema reads only. Flag any new tool, import, or helper that can execute arbitrary SQL, open a write-capable engine, mutate the warehouse, or return row samples beyond the bounded limit. A Candidate Proposal is untrusted input: it may carry only allow-listed action IDs and report-scoped evidence identifiers, never SQL, table names, target keys, or values. Raw live-model output must not be persisted; reconstruct the proposal from canonical governed-action IDs and report-scoped evidence before the task returns. Fail closed on missing credentials, transport errors, replay errors, and malformed model output."
+    },
+    {
+      "path": "src/airflow_dq_agent/action_definitions.py",
+      "merge_system_rule": true,
+      "rule": "Every GovernedAction registration must own the full lifecycle in one place: metadata, policy-parameter derivation, input validation, controlled SQL rendering, and the mutation capability flag. Flag any parallel action-ID switch, string-comparison branch, or duplicated rendering logic in the compiler, target resolver, or executor that bypasses a registration. New or changed registrations require registry-synchronized tests covering the same governed lifecycle, and any action that can mutate data must declare it so the executor and evaluator can gate it."
+    },
+    {
+      "path": "src/airflow_dq_agent/planning/**",
+      "merge_system_rule": true,
+      "rule": "Planning is deterministic and must fail closed. The compiler may only emit steps justified by failed checks from the same Quality Suite Report; a report with no failures must not authorize remediation. Validate every policy-parameter value against the reviewed Check Policy and reject unknown or out-of-range values. Target sets must be derived from contracted primary keys and fingerprinted; a human decision never authorizes rows outside the Remediation Target Set. Apply Admission is durable, single-use, bound to one plan and one Audit Lineage event, and time-bounded: flag any path that can be consumed twice, reused for another plan or report, or accepted after expiry."
+    },
+    {
+      "path": "src/airflow_dq_agent/apply/**",
+      "merge_system_rule": true,
+      "rule": "Apply is the only mutating path and must fail closed. Re-check policy, lock the Remediation Target Set, and compare target and policy fingerprints inside the transaction before rendering or executing any step; abort on target drift, policy drift, or an expired admission. Steps must render through the registered GovernedAction, never ad-hoc SQL. Non-mutating quarantine actions must copy rows, not delete or update source rows. Any new mutation must be reachable only through a passing evaluation, an audited whole-plan Human Decision, and a fresh admission."
+    },
+    {
+      "path": "src/airflow_dq_agent/traces/**",
+      "merge_system_rule": true,
+      "rule": "Audit Lineage is append-only and payload-minimal. Durable records may contain only IDs, fingerprints, counts, sanitized reasons, and outcome metadata, never prompts, raw model output, row samples, or model-authored narrative. `quality_run_id` is the lineage root and record IDs are immutable. Flag any schema change that adds sample values, PII, free-form model text, or a mutable update/delete path on existing audit events. Postgres is required for HITL audit writes; JSONL is supplementary."
+    },
+    {
+      "path": "src/airflow_dq_agent/evals/**",
+      "merge_system_rule": true,
+      "rule": "Evaluation is the authority gate and must stay deterministic and independent of model quality or SQL syntax. A destructive or unallow-listed action must score zero on destructive-risk and allow-list compliance. Groundedness must fail when a green report produces remediation steps. Preserve the fixed case set in evals/cases; flag any change that weakens a gate, makes a failing case pass, or lets a model-authored field influence a score."
+    },
+    {
+      "path": "dags/**/*.py",
+      "merge_system_rule": true,
+      "rule": "The DAG is the HITL boundary and must not leak row data through XCom. Use `sample_free_report` for suite output and `safe_proposal_for_xcom` for proposals; XCom payloads must never contain `sample_failures`, sampled values, unknown fields, or model-authored text. Keep suite, compiler, HITL/audit, and apply bound to their separate least-privilege DSNs (READ_DSN, AUDIT_DSN, APPLY_DSN). A Human Decision requires an attributable, allow-listed actor and a non-empty note; rejection and timeout must produce distinct audit outcomes. Safe defaults remain LLM_MODE=stub and APPLY_MODE=off."
+    },
+    {
+      "path": "src/airflow_dq_agent/contracts/**",
+      "merge_system_rule": true,
+      "rule": "Contracts are typed and carry no authority. Keep proposal and remediation models strictly typed and immutable where they represent governed state; a Candidate Proposal must be structurally unable to carry executable SQL, target keys, or values. Flag widening types (Any, dict[str, Any], free-form str) that weaken validation, and any change to a contract field that alters fingerprints or Audit Lineage identity without a migration note."
+    },
+    {
+      "path": "tests/**/*.py",
+      "merge_system_rule": true,
+      "rule": "Tests encode the authority boundary. New or changed behavior must arrive with a test that fails before the change; bug fixes must reproduce the bug first. Registry-synchronized tests must cover every registered GovernedAction lifecycle. Flag tests that assert on implementation details instead of governed outcomes, that weaken an existing assertion, or that pass only because a failure path was mocked away."
+    },
+    {
+      "path": "**/*.py",
+      "merge_system_rule": true,
+      "rule": "Python 3.12, mypy strict on `src/airflow_dq_agent`, ruff with E,F,I,UP,B,SIM,RUF (line length 100, double quotes). Require full type annotations on functions in src/; do not add a blanket `# type: ignore` without a narrow error code and a reason. Fail closed by default: prefer explicit errors over silent fallbacks, do not swallow exceptions, and never log secrets, DSNs, or row values. Flag mutable default arguments, bare except, and any new network or filesystem write that is not gated by configuration."
+    },
+    {
+      "path": "**/*.md",
+      "merge_system_rule": true,
+      "rule": "Docs must use the CONTEXT.md glossary exactly: Remediation Plan, Quality Evidence, Candidate Proposal, Remediation Target Set, Check Policy, Policy Snapshot, Audit Lineage, Apply Admission, Human Decision, Decision Recording, Decision Fingerprint. Do not introduce synonyms the glossary marks as avoided. Flag claims that the model supplies SQL, target keys, or values, or that imply apply is enabled by default."
+    }
+  ]
+}
