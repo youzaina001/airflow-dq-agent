@@ -173,7 +173,7 @@ def dq_external_invoice() -> None:
                 ),
             ).model_dump(mode="json")
 
-        @task
+        @task(retries=2, retry_delay=timedelta(seconds=5))
         def apply_after_admission_task(
             report_data: dict[str, Any],
             evaluation_data: dict[str, Any],

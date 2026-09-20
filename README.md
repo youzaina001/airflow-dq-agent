@@ -187,10 +187,11 @@ credentials = provision_restricted_logins(owner_dsn)
    | Outcome | How to exercise | `dq.quarantine_rows` | Source `warehouse.ext_invoice` | Audit Lineage |
    | --- | --- | --- | --- | --- |
    | Approve | Required Actions: choose Approve and a non-empty note | Copies missing-amount ids 102 and 104 | Unchanged (101/103 keep amounts; 102/104 stay NULL) | `human_approved` then `apply_succeeded` |
+   | Crash after commit | Approve, then lose the apply task after PostgreSQL commits (`scripts/compose-hitl-crash-retry.sh`) | Copies missing-amount ids 102 and 104 **once** | Unchanged | `human_approved` then one `apply_succeeded`; Airflow retry returns the original committed result, not a consumed-admission failure |
    | Reject | Required Actions: choose Reject | Empty for that run | Unchanged | `human_rejected`; no `apply_succeeded` |
    | Timeout | Do not respond before `DQ_HITL_TIMEOUT_SECONDS` (default 86400). Pinned `apache-airflow-providers-standard==1.12.1` uses `execution_timeout`, not `response_timeout`. | Empty for that run | Unchanged | `human_timed_out` with actor `airflow-timeout`; not an approval |
 
-   `scripts/compose-hitl-reject-timeout.sh` runs Reject and Timeout against real Airflow and asserts these outcomes. Timeout cannot be interpreted as Approve.
+   `scripts/compose-hitl-reject-timeout.sh` runs Reject and Timeout against real Airflow and asserts these outcomes. Timeout cannot be interpreted as Approve. `scripts/compose-hitl-crash-retry.sh` approves, crashes the apply task after commit, retries the same Apply Admission, and asserts one copy of 102/104 plus the original `apply_succeeded` identity.
 
 ## Quick start
 

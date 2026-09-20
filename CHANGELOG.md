@@ -22,6 +22,9 @@
 - Packaged external-invoice adopter example: `register_external_invoice`,
   restricted read/audit/apply login provisioning, and
   `examples/dq_external_invoice.py` for Airflow quarantine copies.
+- Compose HITL crash/retry proof (`scripts/compose-hitl-crash-retry.sh`): a lost
+  apply-task success after PostgreSQL commit recovers the original quarantine
+  copy of invoices 102 and 104 without a second mutation.
 
 ## 0.2.0 - 2026-09-06
 

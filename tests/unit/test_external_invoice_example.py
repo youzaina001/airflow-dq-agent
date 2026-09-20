@@ -307,3 +307,25 @@ def test_documentation_describes_how_to_exercise_rejection_and_timeout() -> None
     assert "Reject" in readme
     assert "Timeout" in readme or "timeout" in readme
     assert (REPO / "scripts" / "compose-hitl-reject-timeout.sh").is_file()
+
+
+def test_documentation_describes_airflow_crash_retry_of_committed_quarantine() -> None:
+    readme = README.read_text(encoding="utf-8")
+    dag = EXAMPLE_DAG.read_text(encoding="utf-8")
+    assert "examples/dq_external_invoice.py" in readme
+    assert "compose-hitl-crash-retry.sh" in readme
+    assert "apply_succeeded" in readme
+    assert "lost" in readme.lower() or "crash" in readme.lower()
+    assert "retry" in readme.lower()
+    assert "102" in readme and "104" in readme
+    assert (REPO / "scripts" / "compose-hitl-crash-retry.sh").is_file()
+    decorator_block = dag[: dag.index("def apply_after_admission_task")]
+    apply_decorator = decorator_block[decorator_block.rfind("@task") :]
+    assert "retries=" in apply_decorator
+    assert "retry_delay" in apply_decorator
+    assert "DQ_COMPOSE_CRASH" not in dag
+    executor = (REPO / "src" / "airflow_dq_agent" / "apply" / "executor.py").read_text(
+        encoding="utf-8"
+    )
+    assert "DQ_COMPOSE_CRASH" not in executor
+    assert "SIGKILL" not in executor

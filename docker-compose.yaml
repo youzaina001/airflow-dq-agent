@@ -22,7 +22,7 @@ x-airflow-common: &airflow-common
     _AIRFLOW_WWW_USER_PASSWORD: airflow
     AIRFLOW_UID: ${AIRFLOW_UID:-50000}
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
-    PYTHONPATH: /opt/airflow/src
+    PYTHONPATH: ${AIRFLOW_PYTHONPATH:-/opt/airflow/src}
     WAREHOUSE_DSN: postgresql+psycopg://dq:dq@warehouse:5432/warehouse
     READ_DSN: ${READ_DSN:-postgresql+psycopg://dq:dq@warehouse:5432/warehouse}
     AUDIT_DSN: ${AUDIT_DSN:-postgresql+psycopg://dq:dq@warehouse:5432/warehouse}
@@ -58,6 +58,7 @@ x-airflow-common: &airflow-common
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/src:/opt/airflow/src
+    - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/airflow/scripts:ro
     - ${AIRFLOW_PROJ_DIR:-.}/evals:/opt/airflow/evals
     - ${AIRFLOW_PROJ_DIR:-.}/traces:/opt/airflow/traces
   user: "${AIRFLOW_UID:-50000}:0"
