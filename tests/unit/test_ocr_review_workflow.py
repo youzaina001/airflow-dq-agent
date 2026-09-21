@@ -58,3 +58,20 @@ def test_ocr_review_timeouts_cover_grouped_openrouter_reviews() -> None:
     assert (
         step["with"]["llm_reasoning_effort"] == "${{ steps.pr-context.outputs.reasoning_effort }}"
     )
+
+
+def test_ocr_version_pin_cannot_be_replaced_by_the_background_updater() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["code-review"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run OpenCodeReview")
+    env = {**workflow.get("env", {}), **job.get("env", {}), **step.get("env", {})}
+    assert env.get("OCR_NO_UPDATE") == "1"
+    assert step["with"]["ocr_version"] == "1.12.7"
+    assert step["uses"] == ("alibaba/open-code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681")
+
+
+def test_ocr_execution_failure_fails_the_check() -> None:
+    job = _load_workflow()["jobs"]["code-review"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run OpenCodeReview")
+    assert job.get("continue-on-error", False) is False
+    assert step.get("continue-on-error", False) is False

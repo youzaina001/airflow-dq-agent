@@ -4,6 +4,9 @@
 
 ### Changed
 
+- OpenCodeReview CI disables background self-updates so the pinned CLI
+  stays at 1.12.7, and reports installation or execution errors as failed
+  checks instead of masking them as successful reviews.
 - OpenCodeReview job timeout is 60 minutes and the per-group review
   deadline is 30 minutes, so grouped OpenRouter reviews are less likely
   to abort as `timeout`. The dispatch dropdown is `z-ai/glm-5.3-flash`,

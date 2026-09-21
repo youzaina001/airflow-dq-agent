@@ -10,8 +10,7 @@
 # (z-ai/glm-5.3-flash, z-ai/glm-5.3-flashx, or deepseek/deepseek-v4.1-flash); otherwise the default
 # is z-ai/glm-5.3-flash. Comment runs use reasoning_effort=low. Not a GitHub mention.
 #
-# Pilot note: the review step sets `continue-on-error: true`, so findings are
-# advisory and never block a merge. Remove that line once precision is trusted.
+# Review findings are advisory; installation and execution errors fail the check.
 
 name: OpenCodeReview PR Review
 
@@ -126,7 +125,9 @@ jobs:
         # Pinned to v1.12.7 (commit 85cecfe) instead of the moving @main ref.
         # ocr_version pins the npm CLI the action installs (default is latest).
         uses: alibaba/open-code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681
-        continue-on-error: true
+        env:
+          # Disable self-update before installation's first `ocr version` call.
+          OCR_NO_UPDATE: '1'
         with:
           ocr_version: '1.12.7'
           llm_url: https://openrouter.ai/api/v1
