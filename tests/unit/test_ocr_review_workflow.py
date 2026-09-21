@@ -1,3 +1,5 @@
+import json
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -10,7 +12,7 @@ ALLOWED_MODELS = [
     "deepseek/deepseek-v4.1-flash",
 ]
 
-ALLOWED_REASONING_EFFORT = ["low", "high", "max"]
+ALLOWED_REASONING_EFFORT = ["low", "medium", "high", "max"]
 
 
 def _load_workflow() -> dict:
@@ -75,3 +77,25 @@ def test_ocr_execution_failure_fails_the_check() -> None:
     step = next(s for s in job["steps"] if s.get("name") == "Run OpenCodeReview")
     assert job.get("continue-on-error", False) is False
     assert step.get("continue-on-error", False) is False
+
+
+def test_dispatch_preserves_medium_reasoning() -> None:
+    script = _load_workflow()["jobs"]["code-review"]["steps"][0]["with"]["script"]
+    harness = """
+const outputs = {};
+const core = {setOutput: (key, value) => outputs[key] = value,
+              setFailed: message => {throw new Error(message)}};
+const context = {eventName: 'workflow_dispatch', repo: {owner: 'test', repo: 'test'},
+                 payload: {inputs: {pr_number: '80', model: 'z-ai/glm-5.3-flashx',
+                                    reasoning_effort: 'medium'}}};
+const github = {rest: {pulls: {get: async () => ({data: {
+    base: {ref: 'master'}, head: {sha: 'test-head'}
+}})}}};
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+new AsyncFunction('core', 'context', 'github', SCRIPT)(core, context, github)
+    .then(() => console.log(JSON.stringify(outputs)));
+""".replace("SCRIPT", json.dumps(script))
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=True)
+    outputs = json.loads(result.stdout)
+    assert outputs["reasoning_effort"] == "medium"
+    assert outputs["model"] == "z-ai/glm-5.3-flashx"
