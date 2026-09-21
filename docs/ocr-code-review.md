@@ -112,13 +112,20 @@ Set one secret under **Settings -> Secrets and variables -> Actions**:
 | --- | --- |
 | `OPENROUTER_API_KEY` | OpenRouter key (`sk-or-...`) |
 
-The workflow pins the action to OCR v1.12.7 and the npm CLI via `ocr_version`.
+The workflow pins the action to commit `85cecfe5f935da2b2aae8f91ce4fee8ed343a681`
+and the npm CLI to `ocr_version: '1.12.7'`. The action step sets
+`OCR_NO_UPDATE: '1'` before any CLI invocation: otherwise even `ocr version`
+can launch a background npm upgrade that replaces the pinned installation
+while the next command starts. To upgrade, update the action SHA and CLI
+version deliberately, along with the version-pin regression test; keep
+self-update disabled.
 Manual runs and `/ocreview` comments have access to repository secrets; OCR only
 reads the diff.
 
-**Pilot mode.** The review step is `continue-on-error: true`, so findings never
-block a merge. Once precision is trusted, remove that line to make it a soft
-gate, and only then consider failing the job on high-severity findings.
+**Failure reporting.** Installation and review execution errors fail the
+workflow check. Findings remain advisory; this workflow does not fail on
+finding severity. A successful command can still report partial coverage,
+so inspect the review summary and artifacts before relying on its coverage.
 
 ## SDLC placement
 
@@ -164,9 +171,8 @@ group). Raise both if a grouped OpenRouter review still classifies files as
 - The workflow never checks out PR code. OCR reads the diff through the API.
   The untrusted part is the diff *content* fed to the model, not code
   execution; keep rule text and review context free of secrets.
-- `continue-on-error: true` is deliberate for the pilot, but it also hides
-  genuine failures (a missing key, an OpenRouter outage). Check the workflow log
-  while the pilot runs, and remove the line once the review is a real gate.
+- A failed check can mean a launcher error, a missing key, or an OpenRouter
+  outage. Check the workflow log and uploaded artifacts for the cause.
 - Code leaves the machine to OpenRouter. Do not add rules that pull secrets or
   row samples into review context; `.env` paths are excluded by OCR's built-in
   secret filter, but keep sample data out of committed files regardless.
