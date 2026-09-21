@@ -41,6 +41,7 @@ on:
         default: low
         options:
           - low
+          - medium
           - high
           - max
   issue_comment:
@@ -78,7 +79,7 @@ jobs:
               'z-ai/glm-5.3-flashx',
               'deepseek/deepseek-v4.1-flash',
             ];
-            const allowedEffort = ['low', 'high', 'max'];
+            const allowedEffort = ['low', 'medium', 'high', 'max'];
             const defaultModel = 'z-ai/glm-5.3-flash';
             const defaultEffort = 'low';
             let prNumber;
