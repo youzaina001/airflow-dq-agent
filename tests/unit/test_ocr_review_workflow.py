@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ocr-review.yml"
@@ -10,6 +11,11 @@ ALLOWED_MODELS = [
     "z-ai/glm-5.3-flash",
     "z-ai/glm-5.3-flashx",
     "deepseek/deepseek-v4.1-flash",
+    "xiaomi/mimo-v2.6-pro",
+    "xiaomi/mimo-v2.6-flash",
+    "tencent/hy4-preview",
+    "openai/gpt-6-luna",
+    "meta/muse-spark-1.3-contributor",
 ]
 
 ALLOWED_REASONING_EFFORT = ["low", "medium", "high", "max"]
@@ -79,15 +85,21 @@ def test_ocr_execution_failure_fails_the_check() -> None:
     assert step.get("continue-on-error", False) is False
 
 
-def test_dispatch_preserves_medium_reasoning() -> None:
+@pytest.mark.parametrize("event", ["workflow_dispatch", "issue_comment"])
+@pytest.mark.parametrize("model", [*ALLOWED_MODELS, "", "unknown/model"])
+@pytest.mark.parametrize("effort", ALLOWED_REASONING_EFFORT)
+def test_model_selection(event: str, model: str, effort: str) -> None:
     script = _load_workflow()["jobs"]["code-review"]["steps"][0]["with"]["script"]
-    harness = """
+    harness = (
+        """
 const outputs = {};
 const core = {setOutput: (key, value) => outputs[key] = value,
               setFailed: message => {throw new Error(message)}};
-const context = {eventName: 'workflow_dispatch', repo: {owner: 'test', repo: 'test'},
-                 payload: {inputs: {pr_number: '80', model: 'z-ai/glm-5.3-flashx',
-                                    reasoning_effort: 'medium'}}};
+const context = {eventName: EVENT, repo: {owner: 'test', repo: 'test'},
+                 issue: {number: 80},
+                 payload: {inputs: {pr_number: '80', model: MODEL,
+                                    reasoning_effort: EFFORT},
+                           comment: {body: '/ocreview ' + MODEL}}};
 const github = {rest: {pulls: {get: async () => ({data: {
     base: {ref: 'master'}, head: {sha: 'test-head'}
 }})}}};
@@ -95,7 +107,21 @@ const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 new AsyncFunction('core', 'context', 'github', SCRIPT)(core, context, github)
     .then(() => console.log(JSON.stringify(outputs)));
 """.replace("SCRIPT", json.dumps(script))
+        .replace("EVENT", json.dumps(event))
+        .replace("MODEL", json.dumps(model))
+        .replace("EFFORT", json.dumps(effort))
+    )
     result = subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=True)
     outputs = json.loads(result.stdout)
-    assert outputs["reasoning_effort"] == "medium"
-    assert outputs["model"] == "z-ai/glm-5.3-flashx"
+    expected_efforts = {
+        "xiaomi/mimo-v2.6-pro": ["", "", "", ""],
+        "xiaomi/mimo-v2.6-flash": ["", "", "", ""],
+        "tencent/hy4-preview": ["low", "high", "high", "high"],
+    }.get(model, ALLOWED_REASONING_EFFORT)
+    effort_index = ALLOWED_REASONING_EFFORT.index(effort) if event == "workflow_dispatch" else 0
+    assert outputs["reasoning_effort"] == expected_efforts[effort_index]
+    assert outputs["model"] == (model if model in ALLOWED_MODELS else "z-ai/glm-5.3-flash")
+    assert outputs["pr_number"] == "80"
+    assert outputs["head_sha"] == "test-head"
+    step = _load_workflow()["jobs"]["code-review"]["steps"][1]
+    assert step["with"]["llm_model"] == "${{ steps.pr-context.outputs.model }}"
