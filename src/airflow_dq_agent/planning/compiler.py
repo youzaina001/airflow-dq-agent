@@ -149,13 +149,19 @@ def compile_remediation_plan(
                 specs = justification.specs
                 if any(spec.table != specs[0].table for spec in specs):
                     raise ValueError("one plan item cannot target more than one contracted table")
-                target_set = target_sets.resolve(
-                    report_run_id=report.run_id,
-                    check_id=specs[0].check_id,
-                    action_id=requested.action_id,
-                    table=specs[0].table,
-                    params=justification.params,
-                )
+                try:
+                    target_set = target_sets.resolve(
+                        report_run_id=report.run_id,
+                        check_id=specs[0].check_id,
+                        action_id=requested.action_id,
+                        table=specs[0].table,
+                        params=justification.params,
+                    )
+                except Exception as exc:
+                    raise check_policy.PolicyRefusal(
+                        "target lookup failed",
+                        blocked_reason="remediation target set could not be resolved",
+                    ) from exc
                 item = ExecutablePlanItem(
                     item_id=f"candidate-{index}",
                     action_id=requested.action_id,
@@ -167,12 +173,16 @@ def compile_remediation_plan(
                 )
                 items.append(item)
                 covered.update(entry.check_id for entry in evidence)
-            except (KeyError, ValueError):
+            except (KeyError, ValueError) as exc:
                 items.append(
                     _blocked_item(
                         index=index,
                         evidence=evidence,
-                        reason="candidate action is unavailable under the controlled policy",
+                        reason=(
+                            exc.blocked_reason
+                            if isinstance(exc, check_policy.PolicyRefusal)
+                            else "candidate action is unavailable under the controlled policy"
+                        ),
                     )
                 )
                 covered.update(
