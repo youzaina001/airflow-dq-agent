@@ -41,7 +41,7 @@ An evaluated, sample-free Remediation Plan review recorded in Audit Lineage with
 _Avoid_: Approval, dry run, shadow skip
 
 **Apply Admission**:
-The durable, single-use authorization to execute one evaluated remediation plan after its whole-plan human decision. It cannot authorize a different plan or report, and it cannot be consumed twice.
+The durable authorization to execute one evaluated Remediation Plan against its Remediation Target Set once, after its whole-plan Human Decision. Retrying a committed Apply Admission returns the original committed result from Audit Lineage with the same identity and counts; this recovery is read-only, even after expiry. It cannot authorize a second mutation or a different plan or report. An unconsumed expired Apply Admission is refused.
 _Avoid_: Approval, permission
 
 **Human Decision**:
