@@ -87,16 +87,23 @@ def dag_runtime(
 
         return wrap
 
+    class _Wire:
+        def __rshift__(self, other: object) -> object:
+            return other
+
+        def __rrshift__(self, other: object) -> object:
+            return self
+
     def _stub_task(
         fn: Callable[..., Any] | None = None, **_kwargs: Any
     ) -> Callable[..., Any] | Callable[[Callable[..., Any]], Callable[..., Any]]:
         def register(candidate: Callable[..., Any]) -> Callable[..., Any]:
             tasks[candidate.__name__] = candidate
 
-            def xcom_reference(*_call_args: Any, **_call_kwargs: Any) -> None:
+            def xcom_reference(*_call_args: Any, **_call_kwargs: Any) -> _Wire:
                 # A TaskFlow call at DAG-definition time wires an XCom reference;
                 # the recorded function is what a task run executes.
-                return None
+                return _Wire()
 
             xcom_reference.__name__ = candidate.__name__
             return xcom_reference
@@ -110,6 +117,21 @@ def dag_runtime(
     monkeypatch.setitem(sys.modules, "airflow", types.ModuleType("airflow"))
     monkeypatch.setitem(sys.modules, "airflow.exceptions", exceptions_module)
     monkeypatch.setitem(sys.modules, "airflow.sdk", sdk_module)
+
+    import airflow_dq_agent.airflow_hitl as airflow_hitl
+
+    class _RecordingApprovalOperator:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.task_id = kwargs.get("task_id", args[0] if args else None)
+            self.output = _Wire()
+
+        def __rshift__(self, other: object) -> object:
+            return other
+
+        def __rrshift__(self, other: object) -> object:
+            return self
+
+    monkeypatch.setattr(airflow_hitl, "AuditedApprovalOperator", _RecordingApprovalOperator)
 
     spec = importlib.util.spec_from_file_location("dq_daily_under_test", DAG_PATH)
     assert spec is not None and spec.loader is not None
