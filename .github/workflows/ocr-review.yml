@@ -6,9 +6,8 @@
 #
 # Start a review from Actions -> OpenCodeReview PR Review -> Run workflow
 # (PR number + model dropdown), or by commenting /ocreview on a pull request.
-# `/ocreview <openrouter-model-id>` uses that model when it is in the dropdown
-# (z-ai/glm-5.3-flash, z-ai/glm-5.3-flashx, or deepseek/deepseek-v4.1-flash); otherwise the default
-# is z-ai/glm-5.3-flash. Comment runs use reasoning_effort=low. Not a GitHub mention.
+# `/ocreview <openrouter-model-id>` uses that model when it is in the dropdown;
+# otherwise the default is z-ai/glm-5.3-flash. Not a GitHub mention.
 #
 # Review findings are advisory; installation and execution errors fail the check.
 
@@ -34,8 +33,13 @@ on:
           - z-ai/glm-5.3-flash
           - z-ai/glm-5.3-flashx
           - deepseek/deepseek-v4.1-flash
+          - xiaomi/mimo-v2.6-pro
+          - xiaomi/mimo-v2.6-flash
+          - tencent/hy4-preview
+          - openai/gpt-6-luna
+          - meta/muse-spark-1.3-contributor
       reasoning_effort:
-        description: GLM/DeepSeek reasoning depth (low is fastest)
+        description: Reasoning depth (MiMo uses provider default; Hy4 medium/max use high)
         required: true
         type: choice
         default: low
@@ -78,6 +82,11 @@ jobs:
               'z-ai/glm-5.3-flash',
               'z-ai/glm-5.3-flashx',
               'deepseek/deepseek-v4.1-flash',
+              'xiaomi/mimo-v2.6-pro',
+              'xiaomi/mimo-v2.6-flash',
+              'tencent/hy4-preview',
+              'openai/gpt-6-luna',
+              'meta/muse-spark-1.3-contributor',
             ];
             const allowedEffort = ['low', 'medium', 'high', 'max'];
             const defaultModel = 'z-ai/glm-5.3-flash';
@@ -102,6 +111,13 @@ jobs:
               prNumber = context.issue.number;
               const token = mention[2] || '';
               if (allowed.includes(token)) model = token;
+            }
+
+            // MiMo exposes no effort levels; omit the field. Hy4 supports low/high.
+            if (['xiaomi/mimo-v2.6-pro', 'xiaomi/mimo-v2.6-flash'].includes(model)) {
+              reasoningEffort = '';
+            } else if (model === 'tencent/hy4-preview' && reasoningEffort !== 'low') {
+              reasoningEffort = 'high';
             }
 
             if (!Number.isInteger(prNumber) || prNumber < 1) {
