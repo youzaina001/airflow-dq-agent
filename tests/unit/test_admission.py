@@ -33,11 +33,15 @@ class _TargetSets:
         return TargetSet(count=5, fingerprint="targets:orders-null-v1")
 
 
-def _evaluated_plan() -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
+def _evaluated_plan(
+    actions: tuple[tuple[str, str], ...] = (
+        ("quarantine_nulls", "fact_orders.total_amount.completeness"),
+    ),
+) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     report = seeded_failure_report()
-    failed = report.get("fact_orders.total_amount.completeness")
-    assert failed is not None
-    scoped_report = report.model_copy(update={"checks": [failed]})
+    checks = [report.get(check_id) for _, check_id in actions]
+    assert all(check is not None for check in checks)
+    scoped_report = report.model_copy(update={"checks": checks})
     scoped_report = scoped_report.model_copy(
         update={"fingerprint": report_payload_fingerprint(scoped_report)}
     )
@@ -46,17 +50,36 @@ def _evaluated_plan() -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
         root_cause_hypothesis="A required value was omitted.",
         candidate_actions=[
             CandidateAction(
-                action_id="quarantine_nulls",
+                action_id=action_id,
                 evidence=[
-                    QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                    QualityEvidence(
+                        check_id=check_id, contract_id=CHECK_SPECS[check_id].contract_id
+                    )
                 ],
                 rationale="Preserve source rows for review.",
             )
+            for action_id, check_id in actions
         ],
         confidence=0.9,
     )
     plan = compile_remediation_plan(scoped_report, candidate, target_sets=_TargetSets())
     return plan, evaluate_plan(plan), scoped_report
+
+
+def test_conflicting_mutating_items_are_refused_before_admission() -> None:
+    plan, evaluation, report = _evaluated_plan(
+        (
+            ("quarantine_nulls", "fact_orders.total_amount.completeness"),
+            ("quarantine_invalids", "fact_orders.status.validity"),
+        )
+    )
+    assert not plan.blocked
+    assert evaluation.passed
+    decision, repository = _bound_approval(plan, evaluation)
+    with pytest.raises(PermissionError, match="conflicting"):
+        create_apply_admission(
+            plan, evaluation, decision, report=report, audit_repository=repository
+        )
 
 
 def _bound_approval(
