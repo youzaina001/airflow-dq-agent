@@ -595,7 +595,7 @@ def test_apply_refuses_plan_and_evaluation_tampers(
 ) -> None:
     plan, evaluation, report = _compile_evaluated(
         ("fact_orders.total_amount.completeness", "quarantine_nulls"),
-        ("fact_orders.status.validity", "quarantine_invalids"),
+        ("dim_customer.email.validity", "quarantine_invalids"),
     )
     admission = _admit(plan, evaluation, report)
     tampered_plan, tampered_evaluation = tamper(plan, evaluation)
