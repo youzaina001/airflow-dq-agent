@@ -19,8 +19,16 @@ def _run_hook(tmp_path: Path, message: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_commit_msg_hook_accepts_a_single_conventional_line(tmp_path: Path) -> None:
-    result = _run_hook(tmp_path, "feat(hitl): add validated Human Decision recorder (#53)\n")
+@pytest.mark.parametrize(
+    "message",
+    [
+        "feat(hitl): add validated Human Decision recorder (#53)\n",
+        "feat: add OpenAI integration\n",
+        "fix: support Claude and Gemini models\n",
+    ],
+)
+def test_commit_msg_hook_accepts_a_single_conventional_line(tmp_path: Path, message: str) -> None:
+    result = _run_hook(tmp_path, message)
 
     assert result.returncode == 0, result.stderr
 
