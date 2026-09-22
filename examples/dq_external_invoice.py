@@ -138,99 +138,99 @@ def dq_external_invoice() -> None:
     compiled = compile_plan_task(report, candidate)
     evaluated = evaluate_plan_task(compiled)
 
-    if settings.apply_mode == "hitl":
+    @task
+    def require_approval(evaluation_data: dict[str, Any]) -> None:
+        if settings.apply_mode != "hitl":
+            raise AirflowSkipException("APPLY_MODE=off does not request human approval")
+        plan = RemediationPlan.model_validate(evaluation_data["plan"])
+        evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
+        if plan.blocked or not evaluation.passed or not plan.items:
+            raise AirflowSkipException("No passing executable remediation plan requires approval")
 
-        @task
-        def require_approval(evaluation_data: dict[str, Any]) -> None:
-            plan = RemediationPlan.model_validate(evaluation_data["plan"])
-            evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
-            if plan.blocked or not evaluation.passed or not plan.items:
-                raise AirflowSkipException(
-                    "No passing executable remediation plan requires approval"
-                )
+    @task
+    def admit_apply_task(
+        report_data: dict[str, Any],
+        evaluation_data: dict[str, Any],
+        decision_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if settings.apply_mode != "hitl":
+            raise AirflowSkipException("APPLY_MODE=off refuses apply admission")
+        # Honest Reject/Timeout skip the apply branch; invalid decisions fail loudly.
+        report = QualitySuiteReport.model_validate(report_data)
+        plan = RemediationPlan.model_validate(evaluation_data["plan"])
+        evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
+        parsed_decision = HumanDecision.model_validate(decision_data)
+        if parsed_decision.decision in {"Reject", "Timeout"}:
+            raise AirflowSkipException("HITL did not approve this remediation plan")
+        return create_apply_admission(
+            plan,
+            evaluation,
+            parsed_decision,
+            report=report,
+            ttl=settings.apply_admission_ttl,
+            audit_repository=PostgresAuditRepository(settings.audit_dsn or settings.warehouse_dsn),
+        ).model_dump(mode="json")
 
-        @task
-        def admit_apply_task(
-            report_data: dict[str, Any],
-            evaluation_data: dict[str, Any],
-            decision_data: dict[str, Any],
-        ) -> dict[str, Any]:
-            # Honest Reject/Timeout skip the apply branch; invalid decisions fail loudly.
-            report = QualitySuiteReport.model_validate(report_data)
-            plan = RemediationPlan.model_validate(evaluation_data["plan"])
-            evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
-            parsed_decision = HumanDecision.model_validate(decision_data)
-            if parsed_decision.decision in {"Reject", "Timeout"}:
-                raise AirflowSkipException("HITL did not approve this remediation plan")
-            return create_apply_admission(
-                plan,
-                evaluation,
-                parsed_decision,
-                report=report,
-                ttl=settings.apply_admission_ttl,
-                audit_repository=PostgresAuditRepository(
-                    settings.audit_dsn or settings.warehouse_dsn
-                ),
-            ).model_dump(mode="json")
-
-        @task(retries=2, retry_delay=timedelta(seconds=5))
-        def apply_after_admission_task(
-            report_data: dict[str, Any],
-            evaluation_data: dict[str, Any],
-            admission_data: dict[str, Any],
-        ) -> dict[str, Any]:
-            report = QualitySuiteReport.model_validate(report_data)
-            plan = RemediationPlan.model_validate(evaluation_data["plan"])
-            evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
-            admission = ApplyAdmission.model_validate(admission_data)
-            result = apply_plan(
-                plan,
-                evaluation,
-                admission,
-                report=report,
-                dry_run=False,
-                engine=make_engine(settings.apply_dsn or settings.warehouse_dsn),
-            )
-            return result.model_dump(mode="json")
-
-        approval_gate = require_approval(evaluated)
-        approval = AuditedApprovalOperator(
-            task_id="approve_remediation_plan",
-            subject="Approve governed DQ remediation plan",
-            body="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review_body'] }}",
-            quality_run_id="{{ ti.xcom_pull(task_ids='run_suite_task')['run_id'] }}",
-            predecessor_event_id=(
-                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['review_event_id'] }}"
-            ),
-            plan_id="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['plan_id'] }}",
-            plan_fingerprint=(
-                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['fingerprint'] }}"
-            ),
-            review_fingerprint=(
-                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review']['fingerprint'] }}"
-            ),
-            evaluation_id=(
-                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['evaluation_id'] }}"
-            ),
-            evaluation_fingerprint=(
-                "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['fingerprint'] }}"
-            ),
-            approver_ids=settings.hitl_approver_id_set,
-            audit_dsn=settings.audit_dsn,
-            defaults="Reject",
-            fail_on_reject=False,
-            params={
-                "approval_note": {
-                    "type": "string",
-                    "title": "Approval note",
-                    "minLength": 1,
-                }
-            },
-            execution_timeout=_HITL_TIMEOUT,
+    @task(retries=2, retry_delay=timedelta(seconds=5))
+    def apply_after_admission_task(
+        report_data: dict[str, Any],
+        evaluation_data: dict[str, Any],
+        admission_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if settings.apply_mode != "hitl":
+            raise AirflowSkipException("APPLY_MODE=off refuses mutation")
+        report = QualitySuiteReport.model_validate(report_data)
+        plan = RemediationPlan.model_validate(evaluation_data["plan"])
+        evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
+        admission = ApplyAdmission.model_validate(admission_data)
+        result = apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=make_engine(settings.apply_dsn or settings.warehouse_dsn),
         )
-        approval_gate >> approval
-        admission = admit_apply_task(report, evaluated, approval.output)
-        apply_after_admission_task(report, evaluated, admission)
+        return result.model_dump(mode="json")
+
+    approval_gate = require_approval(evaluated)
+    approval = AuditedApprovalOperator(
+        task_id="approve_remediation_plan",
+        subject="Approve governed DQ remediation plan",
+        body="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review_body'] }}",
+        quality_run_id="{{ ti.xcom_pull(task_ids='run_suite_task')['run_id'] }}",
+        predecessor_event_id=(
+            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['review_event_id'] }}"
+        ),
+        plan_id="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['plan_id'] }}",
+        plan_fingerprint=(
+            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['fingerprint'] }}"
+        ),
+        review_fingerprint=(
+            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review']['fingerprint'] }}"
+        ),
+        evaluation_id=(
+            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['evaluation_id'] }}"
+        ),
+        evaluation_fingerprint=(
+            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['fingerprint'] }}"
+        ),
+        approver_ids=settings.hitl_approver_id_set,
+        audit_dsn=settings.audit_dsn,
+        defaults="Reject",
+        fail_on_reject=False,
+        params={
+            "approval_note": {
+                "type": "string",
+                "title": "Approval note",
+                "minLength": 1,
+            }
+        },
+        execution_timeout=_HITL_TIMEOUT,
+    )
+    approval_gate >> approval
+    admission = admit_apply_task(report, evaluated, approval.output)
+    apply_after_admission_task(report, evaluated, admission)
 
 
 dq_external_invoice()
