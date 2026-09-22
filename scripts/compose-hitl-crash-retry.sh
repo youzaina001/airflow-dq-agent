@@ -23,17 +23,60 @@ APPLY_TASK="apply_after_admission_task"
 DAG_ID="dq_external_invoice"
 MARKER_HOST="traces/.apply-crash-once"
 
+DAG_BAK=""
+EXISTED=0
 cleanup() {
   if [[ -n "$DAILY_BAK" && -f "$DAILY_BAK" ]]; then
     mv -f "$DAILY_BAK" "$DAILY_DAG" || true
   fi
-  rm -f "$DAG_FILE"
+  if [[ -n "$DAG_BAK" && -f "${DAG_BAK}.staged" ]]; then
+    DAG_FILE="$DAG_FILE" DAG_BAK="$DAG_BAK" EXISTED="$EXISTED" python3 - <<'PY' || true
+import os
+from pathlib import Path
+
+import importlib.util
+
+spec = importlib.util.spec_from_file_location(
+    "compose_hitl_crash_once", "scripts/compose-hitl-crash/crash_once.py"
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+module.unstage_adopter_dag(
+    Path(os.environ["DAG_FILE"]),
+    Path(os.environ["DAG_BAK"]),
+    existed=os.environ["EXISTED"] == "1",
+)
+PY
+  fi
 }
 trap cleanup EXIT
 
 mkdir -p dags logs plugins config traces
 rm -f "$MARKER_HOST"
-cp examples/dq_external_invoice.py "$DAG_FILE"
+DAG_BAK="$(mktemp "$ROOT/dags/.dq_external_invoice.py.bak.XXXXXX")"
+rm -f "$DAG_BAK"
+EXISTED="$(
+  DAG_FILE="$DAG_FILE" DAG_BAK="$DAG_BAK" python3 - <<'PY'
+import os
+from pathlib import Path
+
+import importlib.util
+
+spec = importlib.util.spec_from_file_location(
+    "compose_hitl_crash_once", "scripts/compose-hitl-crash/crash_once.py"
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+existed = module.stage_adopter_dag(
+    Path(os.environ["DAG_FILE"]),
+    Path("examples/dq_external_invoice.py"),
+    Path(os.environ["DAG_BAK"]),
+)
+print("1" if existed else "0")
+PY
+)"
 if [[ -f "$DAILY_DAG" ]]; then
   DAILY_BAK="$(mktemp "$ROOT/dags/.dq_daily.py.bak.XXXXXX")"
   mv "$DAILY_DAG" "$DAILY_BAK"
@@ -202,21 +245,34 @@ wait_dag_success() {
 
 docker compose exec -T airflow-scheduler airflow dags unpause "$DAG_ID"
 
-before_seq="$(psql_wh "SELECT COALESCE(max(seq),0) FROM dq.traces")"
-crash_run="crash-retry-proof"
+crash_run="$(
+  python3 - <<'PY'
+import uuid
+import importlib.util
+
+spec = importlib.util.spec_from_file_location(
+    "compose_hitl_crash_once", "scripts/compose-hitl-crash/crash_once.py"
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+print(module.fresh_run_id(set(), token=uuid.uuid4().hex))
+PY
+)"
 docker compose exec -T airflow-scheduler airflow dags trigger "$DAG_ID" --run-id "$crash_run"
 wait_for_hitl "$crash_run"
+crash_qid="$(xcom_field run_suite_task run_id)"
+python3 - <<PY
+import importlib.util
 
-quality_after_trigger() {
-  QID="$(
-    psql_wh "SELECT body ->> 'quality_run_id' FROM dq.traces WHERE kind = 'quality_report' AND seq > ${before_seq} ORDER BY seq DESC LIMIT 1"
-  )"
-  [[ -n "$QID" ]]
-}
-
-QID=""
-poll_until 60 2 "quality_report after $crash_run" quality_after_trigger || exit 1
-crash_qid="$QID"
+spec = importlib.util.spec_from_file_location(
+    "compose_hitl_crash_once", "scripts/compose-hitl-crash/crash_once.py"
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+module.quality_run_id_from_triggered_xcom("""${crash_qid}""")
+PY
 
 split_body_code "$(
   api_curl_code -X PATCH \
