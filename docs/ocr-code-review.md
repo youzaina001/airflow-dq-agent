@@ -1,7 +1,7 @@
 # AI code review with OpenCodeReview
 
 This repo runs [OpenCodeReview](https://github.com/alibaba/open-code-review) (`ocr`)
-for AI-assisted review. The LLM is OpenRouter, model `z-ai/glm-5.3-flash`.
+for AI-assisted review through OpenRouter. The default model is `z-ai/glm-5.3-flash`.
 
 OCR is an advisory reviewer, not a gate. The deterministic loop (`make check`,
 `make ci`) and human review remain the authority; OCR findings are extra input.
@@ -51,6 +51,9 @@ ocr llm test
 line on stdout. Use it (or `providers.<name>.api_key_cmd` for a built-in
 provider) instead of `api_key` so the secret stays out of `~/.opencodereview/config.json`.
 
+To switch locally, set `custom_providers.openrouter.model` to any model ID
+listed below and run `ocr llm test` again.
+
 ## Local loop
 
 ```bash
@@ -90,20 +93,34 @@ comments.
 branch that contains the workflow (after merge, `master`), the pull request
 number, a model, and reasoning effort. Default model is `z-ai/glm-5.3-flash`.
 Default `reasoning_effort` is `low` (fastest; `high` / `max` think longer).
-Dropdown models: `z-ai/glm-5.3-flash`, `z-ai/glm-5.3-flashx`,
-`deepseek/deepseek-v4.1-flash`.
+Dropdown models:
+
+- `z-ai/glm-5.3-flash` (default)
+- `z-ai/glm-5.3-flashx`
+- `deepseek/deepseek-v4.1-flash`
+- `xiaomi/mimo-v2.6-pro`
+- `xiaomi/mimo-v2.6-flash`
+- `tencent/hy4-preview`
+- `openai/gpt-6-luna`
+- `meta/muse-spark-1.3-contributor`
+
+The [OpenRouter model catalog](https://openrouter.ai/api/v1/models) advertises
+no effort levels for these MiMo models, so the workflow omits reasoning effort
+and uses the provider default. Hy4 supports `low` and `high`; the workflow maps
+`medium` and `max` to `high`. Other models receive the selected effort unchanged.
 
 **PR comment.** On a pull request, a MEMBER/OWNER/COLLABORATOR can comment
 `/ocreview`. That is a slash command, not a GitHub @mention, so it does not
 tag a user. Optionally pass a dropdown model id:
 `/ocreview z-ai/glm-5.3-flashx`. Any other token after `/ocreview` is ignored
-and the default model is used. Comment runs always use `reasoning_effort=low`.
+and the default model is used. Comment runs use `reasoning_effort=low`, except
+MiMo, which uses the provider default.
 Comment triggers use the workflow file on the default branch, so they work
 only after this workflow has landed on `master`.
 
 ```bash
 gh workflow run ocr-review.yml --ref master \
-  -f pr_number=81 -f model=z-ai/glm-5.3-flash -f reasoning_effort=low
+  -f pr_number=81 -f model=xiaomi/mimo-v2.6-pro -f reasoning_effort=low
 ```
 
 Set one secret under **Settings -> Secrets and variables -> Actions**:
@@ -158,7 +175,7 @@ Cost and latency levers, cheapest first:
   thinking; the default is `max`. `low` is the closest analogue to Alibaba's
   `enable_thinking: false`.
 - Model dropdown on `workflow_dispatch` (or `/ocreview <model>` on a PR) —
-  `z-ai/glm-5.3-flash`, `z-ai/glm-5.3-flashx`, or `deepseek/deepseek-v4.1-flash`.
+  choose from the models listed above.
 
 The CI job has `timeout-minutes: 60` and `review_task_timeout: 30` (per
 group). Raise both if a grouped OpenRouter review still classifies files as
