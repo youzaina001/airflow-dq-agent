@@ -93,9 +93,9 @@ requires-dist = [
     { name = "apache-airflow", marker = "extra == 'airflow'", specifier = "==3.3.2" },
     { name = "apache-airflow-providers-common-ai", extras = ["openai", "mcp", "sql"], marker = "extra == 'airflow'", specifier = "==0.9.0" },
     { name = "apache-airflow-providers-common-compat", marker = "extra == 'airflow'", specifier = "==1.19.0" },
-    { name = "apache-airflow-providers-common-sql", marker = "extra == 'airflow'", specifier = "==1.33.0" },
+    { name = "apache-airflow-providers-common-sql", marker = "extra == 'airflow'", specifier = "==2.1.1" },
     { name = "apache-airflow-providers-fab", marker = "extra == 'airflow'", specifier = "==3.9.0" },
-    { name = "apache-airflow-providers-postgres", marker = "extra == 'airflow'", specifier = "==6.5.0" },
+    { name = "apache-airflow-providers-postgres", marker = "extra == 'airflow'", specifier = "==7.0.2" },
     { name = "apache-airflow-providers-standard", marker = "extra == 'airflow'", specifier = "==1.19.0" },
     { name = "fastmcp", specifier = ">=2.10,<4" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
@@ -308,7 +308,7 @@ wheels = [
 
 [[package]]
 name = "apache-airflow-providers-common-sql"
-version = "1.33.0"
+version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-airflow" },
@@ -317,9 +317,9 @@ dependencies = [
     { name = "more-itertools" },
     { name = "sqlparse" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/59/47/dc6a11c02011a485fef54ea46a8ab719927ab1d5b8bedfb9e702b7bfaef7/apache_airflow_providers_common_sql-1.33.0.tar.gz", hash = "sha256:ad53e3e84d05baa12f12ee5966b6a4d83ca74c74804b2b173884768561272928", size = 130230, upload-time = "2026-03-13T17:31:06.414Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/22/84/9ba4ce75a152afc045dd6564931400008852e7fd6eb777a98dafc35fe592/apache_airflow_providers_common_sql-2.1.1.tar.gz", hash = "sha256:7a2f23e7a090b73e55269fde2279cec158b8a7068f524133dcd6be6c2b0ef264", size = 145629, upload-time = "2026-08-23T20:08:30.614Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/a5/a1b059359b04135d9d3418bbd70cda4e4cb401fd3cbbd7c1080685b6df92/apache_airflow_providers_common_sql-1.33.0-py3-none-any.whl", hash = "sha256:21cb700807ad49beff9127236d4764de83e7a068dcf4a988f71c7571c579ccaf", size = 92108, upload-time = "2026-03-13T17:30:28.305Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/df/4ad57b68213397a3dbbebcac778f69aa87e6c0c082628f5bba52b0ebc373/apache_airflow_providers_common_sql-2.1.1-py3-none-any.whl", hash = "sha256:44c64f20f72b2719d5173f8de5b06ac450dd3bfff28ddc4552be4feebc0c53f0", size = 97407, upload-time = "2026-08-23T20:08:01.428Z" },
 ]
 
 [[package]]
@@ -352,18 +352,19 @@ wheels = [
 
 [[package]]
 name = "apache-airflow-providers-postgres"
-version = "6.5.0"
+version = "7.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-airflow" },
     { name = "apache-airflow-providers-common-compat" },
     { name = "apache-airflow-providers-common-sql" },
     { name = "asyncpg" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "psycopg2-binary" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/81/c0/1ed78dc8a8b788c6a64bfba8ececa367938c5977e06f6bd81160271b577b/apache_airflow_providers_postgres-6.5.0.tar.gz", hash = "sha256:7ce5d60119c61b382f15bc4514ca66ab61ce2339348e6b8a3299159d35770451", size = 60964, upload-time = "2025-11-30T22:18:45.825Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/c8/c2309576d3c4508725d2fc09625976583b554862c34cf1c5cd882574780a/apache_airflow_providers_postgres-7.0.2.tar.gz", hash = "sha256:883c5893cb5f5b6fb4eca59dca5f57027d0dfdbee25bc1a98da39b9b0eb693a7", size = 67736, upload-time = "2026-08-23T20:08:43.709Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/a8/1ff50a5a5a26e61bbff1a77051d22574474075aed6a3cbaeb8ebfce94ae8/apache_airflow_providers_postgres-6.5.0-py3-none-any.whl", hash = "sha256:fed8b3eecf50eba6d4a3c81a6f444f8cba80ccfa39f64162e2e003ad6bea11b7", size = 23538, upload-time = "2025-11-30T22:17:19.611Z" },
+    { url = "https://files.pythonhosted.org/packages/67/91/985ab9d9a5bc193811e424ef26654c524b37d01f156980c5c2b08845b671/apache_airflow_providers_postgres-7.0.2-py3-none-any.whl", hash = "sha256:aee87aff618555480c969f0e7377f10e203b6f913191a26df90d3c6d46b06479", size = 25165, upload-time = "2026-08-23T20:08:17.293Z" },
 ]
 
 [[package]]
@@ -4167,11 +4168,11 @@ wheels = [
 
 [[package]]
 name = "types-pyyaml"
-version = "6.0.12.20260815"
+version = "6.0.12.20260906"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9f/72/b56089aeee6c496d969bac42376bedb6e3eeab4682e1018fa3137122f94b/types_pyyaml-6.0.12.20260815.tar.gz", hash = "sha256:28764110c9cf35846e733da32d8d734df7473c5dde9ef67c3b7332ec0e819858", size = 18545, upload-time = "2026-08-15T02:41:51.532Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/6e/abec85b9013db5b934b0280a6dd104904d84f7bcbaab2e2f3def87ac7463/types_pyyaml-6.0.12.20260906.tar.gz", hash = "sha256:f59c1cc05010b833d2d72287bbaa72610106b28d42d89a907313117faba85212", size = 18649, upload-time = "2026-09-06T06:35:35.362Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/52/eefeba09be4ef2a1eb989eb92934561e8e502a6ee3c32654996e4be7e399/types_pyyaml-6.0.12.20260815-py3-none-any.whl", hash = "sha256:6f332212b7e191f3afd5016a713c510b6340593b7ebec573c7d5d20aa5386d3b", size = 21148, upload-time = "2026-08-15T02:41:50.555Z" },
+    { url = "https://files.pythonhosted.org/packages/15/c0/fc0644b7ddcfb969e95845837143cb5173ddd6e06ee4ba5fc493cd9329b7/types_pyyaml-6.0.12.20260906-py3-none-any.whl", hash = "sha256:bca893ff0d51df5c9053137d5d0e6ccd36e939a196356f1d5c16372422f5137b", size = 21282, upload-time = "2026-09-06T06:35:34.372Z" },
 ]
 
 [[package]]
