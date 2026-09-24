@@ -32,14 +32,14 @@ dependencies = [
 
 [project.optional-dependencies]
 airflow = [
-  "apache-airflow==3.1.5",
-  "apache-airflow-providers-common-ai[openai,mcp,sql]==0.8.0",
-  "apache-airflow-providers-common-compat==1.18.0",
-  "apache-airflow-providers-standard==1.12.1",
-  "apache-airflow-providers-fab==3.8.0",
-  "apache-airflow-providers-postgres==6.5.0",
+  "apache-airflow==3.3.2",
+  "apache-airflow-providers-common-ai[openai,mcp,sql]==0.9.0",
+  "apache-airflow-providers-common-compat==1.19.0",
+  "apache-airflow-providers-standard==1.19.0",
+  "apache-airflow-providers-fab==3.9.0",
+  "apache-airflow-providers-postgres==7.0.2",
   "apache-airflow-providers-common-sql==1.33.0",
-  "opentelemetry-exporter-prometheus==0.49b0",
+  "opentelemetry-exporter-prometheus==0.65b0",
 ]
 dev = [
   "pytest>=8.3",
