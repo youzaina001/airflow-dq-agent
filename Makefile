@@ -10,10 +10,11 @@ export WAREHOUSE_DSN ?= postgresql+psycopg://dq:dq@localhost:5433/warehouse
 export TRACES_DIR ?= traces
 OCR ?= ocr
 
-.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install ci catalog compose-smoke review-preview review review-branch compose-hitl
+.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install hooks ci catalog compose-smoke review-preview review review-branch compose-hitl
 
 help:
-	@echo "make install   - editable install with dev extras (no Airflow)"
+	@echo "make install   - editable install with dev extras (no Airflow); enable commit-msg hook"
+	@echo "make hooks     - point this clone at .githooks (one-line commits, no AI trailers)"
 	@echo "make up        - docker compose: Airflow 3.1 + warehouse Postgres"
 	@echo "make down      - tear down compose (keep volumes)"
 	@echo "make seed      - recreate synthetic warehouse + known defects"
@@ -30,8 +31,12 @@ help:
 	@echo "make review-branch - AI-review the current branch vs origin/master"
 	@echo "make lint fmt typecheck ci"
 
-install:
+install: hooks
 	$(PYTHON) -m pip install -e ".[dev]"
+
+hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/commit-msg
 
 up:
 	mkdir -p logs plugins config dags traces
