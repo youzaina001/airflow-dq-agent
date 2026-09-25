@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from typing import Protocol
 from uuid import uuid4
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from airflow_dq_agent import check_policy
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.config import get_settings
@@ -157,7 +159,7 @@ def compile_remediation_plan(
                         table=specs[0].table,
                         params=justification.params,
                     )
-                except Exception as exc:
+                except (KeyError, ValueError, SQLAlchemyError) as exc:
                     raise check_policy.PolicyRefusal(
                         "target lookup failed",
                         blocked_reason="remediation target set could not be resolved",

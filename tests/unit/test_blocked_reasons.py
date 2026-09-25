@@ -1,5 +1,8 @@
 import json
 
+import pytest
+from sqlalchemy.exc import OperationalError
+
 from airflow_dq_agent.contracts import (
     CandidateAction,
     Proposal,
@@ -122,4 +125,36 @@ def test_compiler_blocks_when_remediation_target_set_cannot_be_resolved() -> Non
     assert plan.items[0].kind == "non_executable"
     assert plan.blocked_reasons == [TARGET_RESOLUTION_REASON]
     assert "target lookup failed" not in "".join(plan.blocked_reasons)
+    _assert_sample_free_blocked_lineage(plan, TARGET_RESOLUTION_REASON)
+
+
+def test_compiler_surfaces_resolver_bugs_instead_of_blocking() -> None:
+    one_failure_report, failed = _one_failure_report()
+    candidate = _candidate("quarantine_nulls", failed.check_id, failed.contract_id)
+
+    class BuggyResolver:
+        def resolve(self, **_: object) -> TargetSet:
+            raise TypeError("resolver signature mismatch is a programming bug")
+
+    with pytest.raises(TypeError):
+        compile_remediation_plan(one_failure_report, candidate, target_sets=BuggyResolver())
+
+
+def test_compiler_blocks_with_bounded_reason_when_the_warehouse_is_unavailable() -> None:
+    one_failure_report, failed = _one_failure_report()
+    candidate = _candidate("quarantine_nulls", failed.check_id, failed.contract_id)
+
+    class UnavailableWarehouse:
+        def resolve(self, **_: object) -> TargetSet:
+            raise OperationalError(
+                "SELECT 1", {}, Exception("warehouse connection refused during compilation")
+            )
+
+    plan = compile_remediation_plan(
+        one_failure_report, candidate, target_sets=UnavailableWarehouse()
+    )
+
+    assert plan.items[0].kind == "non_executable"
+    assert plan.blocked_reasons == [TARGET_RESOLUTION_REASON]
+    assert "connection refused" not in "".join(plan.blocked_reasons)
     _assert_sample_free_blocked_lineage(plan, TARGET_RESOLUTION_REASON)
