@@ -22,6 +22,7 @@ from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite
+from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces import (
     InMemoryAuditRepository,
     PostgresAuditRepository,
@@ -33,13 +34,20 @@ from airflow_dq_agent.warehouse.db import make_engine
 
 
 @pytest.mark.integration
-def test_seed_suite_dry_run_and_copy_quarantine(warehouse_dsn: str) -> None:
+def test_seed_suite_dry_run_and_copy_quarantine(
+    warehouse_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seed_warehouse(warehouse_dsn)
     report = run_quality_suite(warehouse_dsn)
     failures = {check.check_id: check.n_failed for check in report.failed_checks}
     for check_id, defect in EXPECTED_DEFECTS.items():
         assert failures[check_id] == defect.n_rows
 
+    # Apply one completeness quarantine; the full demo proposes conflicting table actions.
+    for check_id in list(CHECK_SPECS):
+        if check_id != "fact_orders.total_amount.completeness":
+            monkeypatch.delitem(CHECK_SPECS, check_id)
+    report = run_quality_suite(warehouse_dsn)
     proposal = run_proposal_agent(report).proposal
     assert evaluate_proposal(report, proposal).passed
     assert report.audit_event_id is not None

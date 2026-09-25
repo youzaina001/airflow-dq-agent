@@ -5,9 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
     EvalReport,
+    ExecutablePlanItem,
     HumanDecision,
     QualitySuiteReport,
     RemediationPlan,
@@ -93,6 +95,36 @@ def _verify_durable_approval(
     return audit_event_id
 
 
+def _refuse_conflicting_plan_items(plan: RemediationPlan) -> None:
+    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    seen_identities: set[tuple[str, str, tuple[str, ...]]] = set()
+    evidence_checks: set[str] = set()
+    mutating_tables: set[str] = set()
+    for item in executable:
+        identity = (
+            item.action_id,
+            item.table,
+            tuple(sorted(evidence.check_id for evidence in item.evidence)),
+        )
+        if identity in seen_identities:
+            raise PermissionError(
+                "Refusing admission: duplicate executable items in the remediation plan"
+            )
+        seen_identities.add(identity)
+        for evidence in item.evidence:
+            if evidence.check_id in evidence_checks:
+                raise PermissionError(
+                    "Refusing admission: overlapping executable items share quality evidence"
+                )
+            evidence_checks.add(evidence.check_id)
+        if get_governed_action(item.action_id).mutates:
+            if item.table in mutating_tables:
+                raise PermissionError(
+                    "Refusing admission: conflicting mutating actions on the same table"
+                )
+            mutating_tables.add(item.table)
+
+
 def create_apply_admission(
     plan: RemediationPlan,
     evaluation: EvalReport,
@@ -133,6 +165,7 @@ def create_apply_admission(
     expires_at = decided_at + ttl
     if expires_at <= issued_at:
         raise PermissionError("Refusing admission: apply admission has expired")
+    _refuse_conflicting_plan_items(plan)
     admission_id = uuid4().hex
     fingerprint = admission_payload_fingerprint(
         admission_id=admission_id,

@@ -30,6 +30,7 @@ from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite
+from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces import (
     PostgresAuditRepository,
     append_event,
@@ -37,6 +38,14 @@ from airflow_dq_agent.traces import (
 )
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
+
+
+@pytest.fixture(autouse=True)
+def completeness_check_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Recovery proves the adopted single-check quarantine journey, not conflicting actions.
+    for check_id in list(CHECK_SPECS):
+        if check_id != "fact_orders.total_amount.completeness":
+            monkeypatch.delitem(CHECK_SPECS, check_id)
 
 
 @pytest.fixture(scope="module")

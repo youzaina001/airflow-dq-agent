@@ -9,6 +9,7 @@ from airflow_dq_agent.contracts import (
     CandidateAction,
     DecisionBinding,
     EvalReport,
+    ExecutablePlanItem,
     HumanDecision,
     Proposal,
     QualityEvidence,
@@ -20,8 +21,12 @@ from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_plan
 from airflow_dq_agent.hitl import record_human_decision
-from airflow_dq_agent.planning import compile_remediation_plan
-from airflow_dq_agent.planning.admission import create_apply_admission
+from airflow_dq_agent.planning import compile_remediation_plan, current_policy_fingerprint
+from airflow_dq_agent.planning.admission import (
+    _refuse_conflicting_plan_items,
+    create_apply_admission,
+)
+from airflow_dq_agent.planning.integrity import plan_payload_fingerprint
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces import InMemoryAuditRepository, PostgresAuditRepository
@@ -33,11 +38,15 @@ class _TargetSets:
         return TargetSet(count=5, fingerprint="targets:orders-null-v1")
 
 
-def _evaluated_plan() -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
+def _evaluated_plan(
+    actions: tuple[tuple[str, str], ...] = (
+        ("quarantine_nulls", "fact_orders.total_amount.completeness"),
+    ),
+) -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
     report = seeded_failure_report()
-    failed = report.get("fact_orders.total_amount.completeness")
-    assert failed is not None
-    scoped_report = report.model_copy(update={"checks": [failed]})
+    checks = [report.get(check_id) for _, check_id in actions]
+    assert all(check is not None for check in checks)
+    scoped_report = report.model_copy(update={"checks": checks})
     scoped_report = scoped_report.model_copy(
         update={"fingerprint": report_payload_fingerprint(scoped_report)}
     )
@@ -46,17 +55,36 @@ def _evaluated_plan() -> tuple[RemediationPlan, EvalReport, QualitySuiteReport]:
         root_cause_hypothesis="A required value was omitted.",
         candidate_actions=[
             CandidateAction(
-                action_id="quarantine_nulls",
+                action_id=action_id,
                 evidence=[
-                    QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+                    QualityEvidence(
+                        check_id=check_id, contract_id=CHECK_SPECS[check_id].contract_id
+                    )
                 ],
                 rationale="Preserve source rows for review.",
             )
+            for action_id, check_id in actions
         ],
         confidence=0.9,
     )
     plan = compile_remediation_plan(scoped_report, candidate, target_sets=_TargetSets())
     return plan, evaluate_plan(plan), scoped_report
+
+
+def test_conflicting_mutating_items_are_refused_before_admission() -> None:
+    plan, evaluation, report = _evaluated_plan(
+        (
+            ("quarantine_nulls", "fact_orders.total_amount.completeness"),
+            ("quarantine_invalids", "fact_orders.status.validity"),
+        )
+    )
+    assert not plan.blocked
+    assert evaluation.passed
+    decision, repository = _bound_approval(plan, evaluation)
+    with pytest.raises(PermissionError, match="conflicting"):
+        create_apply_admission(
+            plan, evaluation, decision, report=report, audit_repository=repository
+        )
 
 
 def _bound_approval(
@@ -647,3 +675,60 @@ def test_forged_decision_fingerprint_cannot_create_apply_admission() -> None:
     with pytest.raises(PermissionError, match="fingerprint") as refused:
         create_apply_admission(plan, evaluation, forged, report=report, audit_repository=repository)
     _assert_refusal_is_safe(refused.value)
+
+
+def _plan_with_duplicated_executable_item(
+    plan: RemediationPlan,
+) -> RemediationPlan:
+    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    duplicated = plan.model_copy(update={"items": [*executable, executable[0]]})
+    policy_fingerprint = current_policy_fingerprint(duplicated)
+    return duplicated.model_copy(
+        update={
+            "policy_fingerprint": policy_fingerprint,
+            "fingerprint": plan_payload_fingerprint(
+                plan_id=plan.plan_id,
+                quality_run_id=plan.quality_run_id,
+                candidate_fingerprint=plan.candidate_fingerprint,
+                policy_fingerprint=policy_fingerprint,
+                warehouse_environment_id=plan.warehouse_environment_id,
+                items=duplicated.items,
+            ),
+        }
+    )
+
+
+def test_admission_refuses_duplicate_executable_items() -> None:
+    plan, _, report = _evaluated_plan()
+    duplicated = _plan_with_duplicated_executable_item(plan)
+    evaluation = evaluate_plan(duplicated)
+    assert not duplicated.blocked
+    assert evaluation.passed
+    decision, repository = _bound_approval(duplicated, evaluation)
+
+    with pytest.raises(
+        PermissionError, match="duplicate executable action and quality evidence"
+    ) as refused:
+        create_apply_admission(
+            duplicated, evaluation, decision, report=report, audit_repository=repository
+        )
+    _assert_refusal_is_safe(refused.value)
+
+
+def test_conflict_guard_refuses_duplicate_executable_items() -> None:
+    plan, _, _ = _evaluated_plan()
+    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+
+    with pytest.raises(PermissionError, match="duplicate executable items"):
+        _refuse_conflicting_plan_items(
+            plan.model_copy(update={"items": [*executable, executable[0]]})
+        )
+
+
+def test_conflict_guard_refuses_items_sharing_quality_evidence() -> None:
+    plan, _, _ = _evaluated_plan()
+    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    twin = executable[0].model_copy(update={"action_id": "no_op_alert"})
+
+    with pytest.raises(PermissionError, match="share quality evidence"):
+        _refuse_conflicting_plan_items(plan.model_copy(update={"items": [*executable, twin]}))
