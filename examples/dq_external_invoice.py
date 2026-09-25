@@ -155,7 +155,7 @@ def dq_external_invoice() -> None:
     ) -> dict[str, Any]:
         if settings.apply_mode != "hitl":
             raise AirflowSkipException("APPLY_MODE=off refuses apply admission")
-        # Honest Reject/Timeout skip the apply branch; invalid decisions fail loudly.
+        # Honest Reject/Timeout skip the apply branch; in hitl mode invalid decisions fail loudly.
         report = QualitySuiteReport.model_validate(report_data)
         plan = RemediationPlan.model_validate(evaluation_data["plan"])
         evaluation = EvalReport.model_validate(evaluation_data["evaluation"])
