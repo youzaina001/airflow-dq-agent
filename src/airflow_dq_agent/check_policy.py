@@ -20,6 +20,15 @@ from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
 class PolicyRefusal(ValueError):
     """A requested action is not justified by the Check Policy."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        blocked_reason: str = "candidate action is unavailable under the controlled policy",
+    ) -> None:
+        super().__init__(message)
+        self.blocked_reason = blocked_reason
+
 
 def failed_checks_by_id(report: QualitySuiteReport) -> dict[str, CheckResult]:
     """The failed checks of one report, keyed for Check Policy justification."""
@@ -47,22 +56,37 @@ def justify_action(
     controlled parameters must derive identically from every cited check.
     """
     if not evidence:
-        raise PolicyRefusal("requested action has no quality evidence")
+        raise PolicyRefusal(
+            "requested action has no quality evidence",
+            blocked_reason="candidate evidence is invalid for this quality report",
+        )
     specs: list[CheckSpec] = []
     for item in evidence:
-        failed = report_failures.get(item.check_id)
-        if failed is None or failed.contract_id != item.contract_id:
-            raise PolicyRefusal("quality evidence is not a failed check in this report")
         try:
             specs.append(get_check_spec(item.check_id))
         except KeyError as exc:
-            raise PolicyRefusal("quality evidence does not name a declared check") from exc
+            raise PolicyRefusal(
+                "quality evidence does not name a declared check",
+                blocked_reason="unknown check is not in the quality catalog",
+            ) from exc
+        failed = report_failures.get(item.check_id)
+        if failed is None or failed.contract_id != item.contract_id:
+            raise PolicyRefusal(
+                "quality evidence is not a failed check in this report",
+                blocked_reason="candidate evidence is invalid for this quality report",
+            )
     try:
         governed = get_governed_action(action_id)
     except KeyError as exc:
-        raise PolicyRefusal("requested action is outside the governed catalog") from exc
+        raise PolicyRefusal(
+            "requested action is outside the governed catalog",
+            blocked_reason="requested action is unsupported by the check policy",
+        ) from exc
     if any(spec.rule_for(action_id) is None for spec in specs):
-        raise PolicyRefusal("requested action is not declared by the check policy")
+        raise PolicyRefusal(
+            "requested action is not declared by the check policy",
+            blocked_reason="requested action is unsupported by the check policy",
+        )
     try:
         params = governed.derive_params(specs[0])
         consistent = all(governed.derive_params(spec) == params for spec in specs[1:])

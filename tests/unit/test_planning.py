@@ -93,7 +93,7 @@ def test_compiler_blocks_catalogued_but_unreviewed_null_fill_without_target_look
 
     assert plan.blocked is True
     assert plan.items[0].kind == "non_executable"
-    assert plan.blocked_reasons == ["candidate action is unavailable under the controlled policy"]
+    assert plan.blocked_reasons == ["requested action is unsupported by the check policy"]
 
 
 def test_governed_action_renders_an_executable_compiled_item() -> None:
