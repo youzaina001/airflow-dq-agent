@@ -151,6 +151,10 @@ def test_governance_ddl_keeps_apply_from_writing_source_or_audit() -> None:
 
 def _load_example_dag(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    apply_mode: str = "hitl",
+    llm_mode: str = "stub",
+    module_name: str = "dq_external_invoice_under_test",
 ) -> tuple[types.ModuleType, dict[str, Callable[..., Any]], list[dict[str, Any]]]:
     monkeypatch.setenv("WAREHOUSE_DSN", "postgresql+psycopg://dq:dq@localhost:5433/warehouse")
     monkeypatch.setenv(
@@ -162,8 +166,8 @@ def _load_example_dag(
     monkeypatch.setenv(
         "APPLY_DSN", "postgresql+psycopg://dq_apply_login:apply@localhost:5433/warehouse"
     )
-    monkeypatch.setenv("LLM_MODE", "stub")
-    monkeypatch.setenv("APPLY_MODE", "hitl")
+    monkeypatch.setenv("LLM_MODE", llm_mode)
+    monkeypatch.setenv("APPLY_MODE", apply_mode)
     monkeypatch.setenv("HITL_APPROVER_IDS", "airflow")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -225,7 +229,8 @@ def _load_example_dag(
 
     monkeypatch.setattr(hitl, "AuditedApprovalOperator", _FakeApproval)
 
-    spec = importlib.util.spec_from_file_location("dq_external_invoice_under_test", EXAMPLE_DAG)
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(module_name, EXAMPLE_DAG)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -272,6 +277,141 @@ def test_example_dag_hitl_timeout_uses_execution_timeout_compatible_with_provide
     assert "response_timeout=" not in source
     assert "execution_timeout=" in source
     assert "DQ_HITL_TIMEOUT_SECONDS" in source
+
+
+_EXAMPLE_TASK_IDS = frozenset(
+    {
+        "run_suite_task",
+        "propose_task",
+        "audit_candidate_task",
+        "compile_plan_task",
+        "evaluate_plan_task",
+        "require_approval",
+        "approve_remediation_plan",
+        "admit_apply_task",
+        "apply_after_admission_task",
+    }
+)
+
+
+def _example_task_ids(
+    tasks: dict[str, Callable[..., Any]], operator_kwargs: list[dict[str, Any]]
+) -> set[str]:
+    return set(tasks) | {str(item["task_id"]) for item in operator_kwargs}
+
+
+@pytest.mark.parametrize("llm_mode", ("stub", "replay", "live"))
+@pytest.mark.parametrize("apply_mode", ("off", "hitl"))
+def test_example_dag_task_ids_stay_stable_across_modes(
+    monkeypatch: pytest.MonkeyPatch, llm_mode: str, apply_mode: str
+) -> None:
+    _module, tasks, operator_kwargs = _load_example_dag(
+        monkeypatch,
+        apply_mode=apply_mode,
+        llm_mode=llm_mode,
+        module_name=f"invoice_topology_{llm_mode}_{apply_mode}",
+    )
+    assert _example_task_ids(tasks, operator_kwargs) == _EXAMPLE_TASK_IDS
+
+
+def test_example_apply_skips_before_mutation_when_apply_mode_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from airflow_dq_agent.contracts.models import (
+        ApplyAdmission,
+        CheckResult,
+        CheckStatus,
+        EvalReport,
+        ExecutablePlanItem,
+        HumanDecision,
+        QualityEvidence,
+        QualitySuiteReport,
+        RemediationPlan,
+    )
+
+    module, tasks, _operator_kwargs = _load_example_dag(
+        monkeypatch, apply_mode="off", module_name="invoice_skip_off"
+    )
+    plan = RemediationPlan(
+        quality_run_id="run-1",
+        candidate_fingerprint="cand-1",
+        policy_fingerprint="pol-1",
+        items=(
+            ExecutablePlanItem(
+                item_id="item-1",
+                action_id="quarantine_nulls",
+                table="external_invoice",
+                evidence=(QualityEvidence(check_id="c1", contract_id="t1"),),
+                target_set=TargetSet(count=1, fingerprint="ts-1"),
+                policy_fingerprint="pol-1",
+            ),
+        ),
+        blocked=False,
+        warehouse_environment_id="localhost:5433/warehouse",
+        fingerprint="plan-fp-1",
+    )
+    evaluation = EvalReport(
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        passed=True,
+        scores=[],
+        fingerprint="eval-fp-1",
+    )
+    report = QualitySuiteReport(
+        run_id="run-1",
+        checks=[
+            CheckResult(
+                check_id="c1",
+                table="external_invoice",
+                dimension=Dimension.COMPLETENESS,
+                status=CheckStatus.FAIL,
+                message="amount is null",
+                contract_id="t1",
+            )
+        ],
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    admission = ApplyAdmission(
+        quality_run_id="run-1",
+        plan_id=plan.plan_id,
+        plan_fingerprint=plan.fingerprint,
+        evaluation_id=evaluation.evaluation_id,
+        evaluation_fingerprint="eval-fp-1",
+        decision_id="dec-1",
+        decision_event_id="decision-event-1",
+        policy_fingerprint="pol-1",
+        warehouse_environment_id="localhost:5433/warehouse",
+        issued_at=now,
+        expires_at=now + timedelta(hours=24),
+        fingerprint="adm-fp-1",
+    )
+    evaluation_payload = {
+        "plan": plan.model_dump(mode="json"),
+        "evaluation": evaluation.model_dump(mode="json"),
+    }
+    decision = HumanDecision(
+        decision="Approve",
+        actor="airflow",
+        note="Reviewed the whole plan.",
+        audit_event_id="decision-event-1",
+    ).model_dump(mode="json")
+
+    def _forbid_apply(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("apply_plan must not run when APPLY_MODE=off")
+
+    monkeypatch.setattr(module, "apply_plan", _forbid_apply)
+    with pytest.raises(module.AirflowSkipException):
+        tasks["require_approval"](evaluation_payload)
+    with pytest.raises(module.AirflowSkipException):
+        tasks["admit_apply_task"](report.model_dump(mode="json"), evaluation_payload, decision)
+    with pytest.raises(module.AirflowSkipException):
+        tasks["apply_after_admission_task"](
+            report.model_dump(mode="json"),
+            evaluation_payload,
+            admission.model_dump(mode="json"),
+        )
 
 
 def test_example_dag_skips_apply_on_reject_and_timeout(
