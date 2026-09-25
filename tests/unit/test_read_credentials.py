@@ -420,14 +420,21 @@ def _load_dag_tasks(
 
         return wrap
 
+    class _Wire:
+        def __rshift__(self, other: object) -> object:
+            return other
+
+        def __rrshift__(self, other: object) -> object:
+            return self
+
     def _stub_task(
         fn: Callable[..., Any] | None = None, **_kwargs: Any
     ) -> Callable[..., Any] | Callable[[Callable[..., Any]], Callable[..., Any]]:
         def register(candidate: Callable[..., Any]) -> Callable[..., Any]:
             tasks[candidate.__name__] = candidate
 
-            def xcom_reference(*_call_args: Any, **_call_kwargs: Any) -> None:
-                return None
+            def xcom_reference(*_call_args: Any, **_call_kwargs: Any) -> _Wire:
+                return _Wire()
 
             xcom_reference.__name__ = candidate.__name__
             return xcom_reference
@@ -439,6 +446,21 @@ def _load_dag_tasks(
     monkeypatch.setitem(sys.modules, "airflow", types.ModuleType("airflow"))
     monkeypatch.setitem(sys.modules, "airflow.exceptions", exceptions_module)
     monkeypatch.setitem(sys.modules, "airflow.sdk", sdk_module)
+
+    import airflow_dq_agent.airflow_hitl as airflow_hitl
+
+    class _RecordingApprovalOperator:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.task_id = kwargs.get("task_id", args[0] if args else None)
+            self.output = _Wire()
+
+        def __rshift__(self, other: object) -> object:
+            return other
+
+        def __rrshift__(self, other: object) -> object:
+            return self
+
+    monkeypatch.setattr(airflow_hitl, "AuditedApprovalOperator", _RecordingApprovalOperator)
 
     spec = importlib.util.spec_from_file_location("dq_daily_read_credentials", DAG_PATH)
     assert spec is not None and spec.loader is not None
