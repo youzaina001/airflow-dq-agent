@@ -21,15 +21,13 @@ from airflow_dq_agent.contracts import (
     RemediationPlan,
 )
 from airflow_dq_agent.demo import register_demo
-from airflow_dq_agent.evals import evaluate_plan, evaluate_proposal
-from airflow_dq_agent.planning import compile_remediation_plan
+from airflow_dq_agent.evals import evaluate_proposal
+from airflow_dq_agent.planning.preparation import CandidateEvaluationFailed, prepare_plan_review
 from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.integrity import verify_report_integrity
-from airflow_dq_agent.planning.review import build_approval_review, render_approval_review_body
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candidate_proposal_event
-from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
 
 # Synthetic demo warehouse. HITL/apply against an adopter table is
@@ -84,51 +82,31 @@ def dq_daily() -> None:
         }
 
     @task
-    def compile_plan_task(
+    def prepare_plan_task(
         report_data: dict[str, Any], candidate_data: dict[str, Any]
     ) -> dict[str, Any]:
         report = QualitySuiteReport.model_validate(report_data)
         proposal = Proposal.model_validate(candidate_data["proposal"])
         candidate_evaluation = EvalReport.model_validate(candidate_data["candidate_evaluation"])
-        verify_report_integrity(report, refusing="plan compilation")
-        if not candidate_evaluation.passed:
-            raise AirflowSkipException("Candidate Proposal evaluation failed")
-        plan = compile_remediation_plan(
-            report,
-            proposal,
-            target_sets=PostgresTargetSetResolver(
-                engine=make_engine(settings.read_dsn or settings.warehouse_dsn)
-            ),
-        )
-        event = plan_event(plan, str(candidate_data["candidate_event_id"]))
-        append_event(event)
-        return {"plan": plan.model_dump(mode="json"), "plan_event_id": event.event_id}
-
-    @task
-    def evaluate_plan_task(plan_data: dict[str, Any]) -> dict[str, Any]:
-        plan = RemediationPlan.model_validate(plan_data["plan"])
-        evaluation = evaluate_plan(plan)
-        event = evaluation_event(plan, evaluation, str(plan_data["plan_event_id"]))
-        append_event(event)
-        evaluation = evaluation.model_copy(update={"audit_event_id": event.event_id})
-        review = build_approval_review(plan, evaluation, ttl=settings.apply_admission_ttl)
-        review_audit = review_event(review, evaluation, event)
-        append_event(review_audit)
-        return {
-            "plan": plan.model_dump(mode="json"),
-            "plan_event_id": plan_data["plan_event_id"],
-            "evaluation": evaluation.model_dump(mode="json"),
-            "evaluation_event_id": event.event_id,
-            "approval_review": review.model_dump(mode="json"),
-            "approval_review_body": render_approval_review_body(review),
-            "review_event_id": review_audit.event_id,
-        }
+        try:
+            return prepare_plan_review(
+                report,
+                proposal,
+                candidate_evaluation=candidate_evaluation,
+                candidate_event_id=str(candidate_data["candidate_event_id"]),
+                target_sets=PostgresTargetSetResolver(
+                    engine=make_engine(settings.read_dsn or settings.warehouse_dsn)
+                ),
+                persist=append_event,
+                ttl=settings.apply_admission_ttl,
+            )
+        except CandidateEvaluationFailed as exc:
+            raise AirflowSkipException(str(exc)) from exc
 
     report = run_suite_task()
     proposal = propose_task(report)
     candidate = audit_candidate_task(report, proposal)
-    compiled = compile_plan_task(report, candidate)
-    evaluated = evaluate_plan_task(compiled)
+    evaluated = prepare_plan_task(report, candidate)
 
     @task
     def require_approval(evaluation_data: dict[str, Any]) -> None:
@@ -190,23 +168,23 @@ def dq_daily() -> None:
         task_id="approve_remediation_plan",
         subject="Approve governed DQ remediation plan",
         # HITL body is a string; the sample-free review is rendered upstream.
-        body="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review_body'] }}",
+        body="{{ ti.xcom_pull(task_ids='prepare_plan_task')['approval_review_body'] }}",
         quality_run_id="{{ ti.xcom_pull(task_ids='run_suite_task')['run_id'] }}",
         predecessor_event_id=(
-            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['review_event_id'] }}"
+            "{{ ti.xcom_pull(task_ids='prepare_plan_task')['review_event_id'] }}"
         ),
-        plan_id="{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['plan_id'] }}",
+        plan_id="{{ ti.xcom_pull(task_ids='prepare_plan_task')['plan']['plan_id'] }}",
         plan_fingerprint=(
-            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['plan']['fingerprint'] }}"
+            "{{ ti.xcom_pull(task_ids='prepare_plan_task')['plan']['fingerprint'] }}"
         ),
         review_fingerprint=(
-            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['approval_review']['fingerprint'] }}"
+            "{{ ti.xcom_pull(task_ids='prepare_plan_task')['approval_review']['fingerprint'] }}"
         ),
         evaluation_id=(
-            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['evaluation_id'] }}"
+            "{{ ti.xcom_pull(task_ids='prepare_plan_task')['evaluation']['evaluation_id'] }}"
         ),
         evaluation_fingerprint=(
-            "{{ ti.xcom_pull(task_ids='evaluate_plan_task')['evaluation']['fingerprint'] }}"
+            "{{ ti.xcom_pull(task_ids='prepare_plan_task')['evaluation']['fingerprint'] }}"
         ),
         approver_ids=settings.hitl_approver_id_set,
         audit_dsn=settings.audit_dsn,
