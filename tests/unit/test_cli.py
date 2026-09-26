@@ -144,3 +144,61 @@ def test_demo_refuses_incomplete_checking(
     output = capsys.readouterr().out
     assert "incomplete" in output
     assert "do not review a remediation plan" in output
+
+
+@pytest.mark.parametrize("outcome", ["passing", "blocked", "audit_failed", "incomplete"])
+def test_shadow_uses_existing_report_root_and_persists_sample_free_review(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    outcome: str,
+) -> None:
+    import json
+
+    from airflow_dq_agent import cli
+    from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
+    from airflow_dq_agent.contracts.models import AuditEvent, TargetSet
+
+    raw = _error_report() if outcome == "incomplete" else seeded_failure_report()
+    report = raw.model_copy(
+        update={"audit_event_id": "existing-root", "fingerprint": report_payload_fingerprint(raw)}
+    )
+    monkeypatch.setenv("LLM_MODE", "stub")
+    monkeypatch.setenv("READ_DSN", "postgresql+psycopg://reader:x@localhost/warehouse")
+    monkeypatch.setattr(cli, "run_quality_suite", lambda dsn: report)
+    events: list[AuditEvent] = []
+
+    def persist(event: AuditEvent) -> None:
+        if outcome == "audit_failed":
+            raise RuntimeError("secret audit failure")
+        events.append(event)
+
+    class Targets:
+        def __init__(self, *, dsn: str) -> None:
+            assert "reader" in dsn
+
+        def resolve(self, **_: object) -> TargetSet:
+            if outcome == "blocked":
+                raise ValueError("secret target failure")
+            return TargetSet(count=5, fingerprint="targets:cli")
+
+    monkeypatch.setattr(cli, "append_event", persist, raising=False)
+    monkeypatch.setattr(cli, "PostgresTargetSetResolver", Targets, raising=False)
+    assert main(["shadow"]) == (2 if outcome in {"audit_failed", "incomplete"} else 1)
+    output = capsys.readouterr().out
+    assert "secret" not in output
+    assert "sample_failures" not in output
+    if outcome in {"audit_failed", "incomplete"}:
+        assert not events
+        assert "do not review a remediation plan" in output
+        return
+    assert [event.kind for event in events] == [
+        "candidate_proposal",
+        "plan_blocked" if outcome == "blocked" else "plan_compiled",
+        "evaluation",
+        "approval_review",
+    ]
+    assert events[0].predecessor_ids == ["existing-root"]
+    review = json.loads(output[output.index("{") :])
+    assert review["approval_review"] == events[-1].review_payload
+    assert review["review_event_id"] == events[-1].event_id
+    assert review["plan"]["candidate_fingerprint"] == events[0].candidate_fingerprint
