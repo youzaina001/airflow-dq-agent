@@ -141,7 +141,7 @@ jobs:
         if: ${{ steps.pr-context.outputs.skip != 'true' }}
         # Pinned to v1.12.7 (commit 85cecfe) instead of the moving @main ref.
         # ocr_version pins the npm CLI the action installs (default is latest).
-        uses: alibaba/open-code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681
+        uses: alibaba/open-code-review@bccbc15f785269400735d5255540c231e6c02b6d
         env:
           # Disable self-update before installation's first `ocr version` call.
           OCR_NO_UPDATE: '1'
