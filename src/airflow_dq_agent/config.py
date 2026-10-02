@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     replay_trace_path: Path | None = None
     traces_dir: Path = Path("traces")
     trace_postgres: bool = False
+    registry_path: Path | None = None
     catalog_mcp_host: str = "127.0.0.1"
     catalog_mcp_port: int = 8000
     sample_row_limit: int = 20

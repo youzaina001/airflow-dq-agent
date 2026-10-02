@@ -92,3 +92,10 @@ def load_registry(path: str | Path) -> None:
         CHECK_SPECS.clear()
         CHECK_SPECS.update(checks)
         raise
+
+
+def use_registry(path: str | Path) -> None:
+    """Replace in-process catalogs with the one selected registry file."""
+    TABLE_CONTRACTS.clear()
+    CHECK_SPECS.clear()
+    load_registry(path)

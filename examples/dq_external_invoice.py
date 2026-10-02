@@ -40,8 +40,9 @@ from airflow_dq_agent.quality import run_quality_suite, sample_free_report
 from airflow_dq_agent.traces import PostgresAuditRepository, append_event, candidate_proposal_event
 from airflow_dq_agent.warehouse.db import make_engine
 
-register_external_invoice()
 settings = get_settings()
+if settings.registry_path is None:
+    register_external_invoice()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
     raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")
 
@@ -211,4 +212,5 @@ def dq_external_invoice() -> None:
     apply_after_admission_task(report, evaluated, admission)
 
 
-dq_external_invoice()
+if settings.registry_path is None:
+    dq_external_invoice()

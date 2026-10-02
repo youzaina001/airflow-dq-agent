@@ -32,8 +32,9 @@ from airflow_dq_agent.warehouse.db import make_engine
 
 # Synthetic demo warehouse. HITL/apply against an adopter table is
 # examples/dq_external_invoice.py, not this file with a swapped register_*.
-register_demo()
 settings = get_settings()
+if settings.registry_path is None:
+    register_demo()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
     raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")
 
@@ -205,4 +206,5 @@ def dq_daily() -> None:
     apply_after_admission_task(report, evaluated, admission)
 
 
-dq_daily()
+if settings.registry_path is None:
+    dq_daily()

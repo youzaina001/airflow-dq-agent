@@ -144,6 +144,57 @@ apply against an adopter table are proven by
 swapping that registration into `dq_daily`. Keep `APPLY_MODE=off` until a passing
 plan should request approval.
 
+## Configured Shadow Review
+
+Shadow Review records an evaluated, sample-free Remediation Plan review in PostgreSQL
+Audit Lineage and stops. It creates no Human Decision or Apply Admission. Quarantine
+copies rows into `dq.quarantine_rows` and does not repair source data; this command
+does not perform that copy.
+
+Pass one adopter registry. The demo catalog is not loaded on this path. Set
+`schema_name` when the table is not in the default `warehouse` schema. `READ_DSN` and
+`AUDIT_DSN` are both required and must use distinct logins. `TRACE_POSTGRES=true` is
+required; JSONL-only (`TRACE_POSTGRES=false`) is not a completed Shadow Review.
+`LLM_MODE=stub` makes no model call and needs no model credentials.
+
+```bash
+TRACE_POSTGRES=true \
+READ_DSN='postgresql+psycopg://dq_read_login:secret@localhost/warehouse' \
+AUDIT_DSN='postgresql+psycopg://dq_audit_login:secret@localhost/warehouse' \
+LLM_MODE=stub \
+APPLY_MODE=off \
+python -m airflow_dq_agent.cli shadow --registry examples/my_warehouse.yaml
+```
+
+`dags/dq_shadow.py` is the same journey when `REGISTRY_PATH` points at that file. It
+does not load the demo catalog and it does not register a Human Decision or apply
+task. Leave `REGISTRY_PATH` unset and the file stays idle.
+Selecting `REGISTRY_PATH` keeps `dq_daily` and the external-invoice example idle so
+their catalogs cannot mix with the adopter registry. Compose passes the selected
+container path to every Airflow service; mount the registry under `config/`.
+
+- Exit 0: every check passed and no remediation was required.
+- Exit 1: the suite found failures, or the review evaluation did not pass. A passing
+  review of failed checks is still exit 1; read the printed Shadow Review. A blocked
+  plan says not to request a Human Decision.
+- Exit 2: invalid registry, an allow-list refusal while loading, an empty suite, an
+  unavailable read connection, check errors, or missing PostgreSQL audit configuration.
+  No review was recorded.
+
+A table without a single-column primary key is refused when the registry loads (exit 2),
+for example `invoice does not have a single-column primary key`. A plan that loads and
+then blocks is exit 1 and tells you not to request a Human Decision.
+An unresolved target set keeps the failed-check evidence visible and reports the
+target count as unavailable; it does not mean there are zero affected rows.
+
+`make compose-shadow` runs the configured CLI and actual Airflow DAG against a fresh
+disposable PostgreSQL database with distinct restricted read and audit logins. It
+checks both report-to-review lineages, unchanged source rows, and zero quarantine
+or apply records. CI requires this proof; the task-body integration test uses
+Airflow stubs and is supplementary. A skipped or failed Compose run leaves this
+acceptance incomplete. The script leaves the Compose services and disposable
+database available for inspection.
+
 ## External invoice example (restricted credentials)
 
 The packaged example registers one external PostgreSQL table (`ext_invoice`) with a
