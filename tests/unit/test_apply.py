@@ -150,10 +150,13 @@ class _CommitTrackingTransaction:
 class _CommitTrackingEngine:
     def __init__(self, dsn: str = "postgresql+psycopg://dq:dq@localhost:5433/warehouse") -> None:
         self.transaction = _CommitTrackingTransaction()
+        self.transactions: list[_CommitTrackingTransaction] = []
         self.url = make_url(dsn)
 
     def begin(self) -> _CommitTrackingTransaction:
-        return self.transaction
+        transaction = self.transaction if not self.transactions else _CommitTrackingTransaction()
+        self.transactions.append(transaction)
+        return transaction
 
 
 class _JsonlFaultAfterCommit:
@@ -185,11 +188,14 @@ class _LockBoomResolver:
 
 def _approved_quarantine_plan(
     now: datetime,
+    requests: tuple[tuple[str, str], ...] = (
+        ("fact_orders.total_amount.completeness", "quarantine_nulls"),
+    ),
 ) -> tuple[RemediationPlan, EvalReport, ApplyAdmission, QualitySuiteReport]:
     report = seeded_failure_report()
-    failed = report.get("fact_orders.total_amount.completeness")
-    assert failed is not None
-    scoped = report.model_copy(update={"checks": [failed]})
+    failed_checks = [report.get(check_id) for check_id, _ in requests]
+    assert all(failed is not None for failed in failed_checks)
+    scoped = report.model_copy(update={"checks": failed_checks})
     scoped = scoped.model_copy(update={"fingerprint": report_payload_fingerprint(scoped)})
     plan = compile_remediation_plan(
         scoped,
@@ -198,12 +204,13 @@ def _approved_quarantine_plan(
             root_cause_hypothesis="The source omitted a required value.",
             candidate_actions=[
                 CandidateAction(
-                    action_id="quarantine_nulls",
+                    action_id=action_id,
                     evidence=[
                         QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
                     ],
                     rationale="Preserve source rows for review.",
                 )
+                for failed, (_, action_id) in zip(failed_checks, requests, strict=True)
             ],
             confidence=0.9,
         ),
@@ -239,6 +246,132 @@ def _approved_quarantine_plan(
         audit_repository=InMemoryAuditRepository([shown, event]),
     )
     return plan, evaluation, admission, scoped
+
+
+@pytest.mark.parametrize("waited_stage", ["connection", "targets", "sub-millisecond"])
+def test_apply_refuses_admission_that_expires_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    waited_stage: str,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    current = [
+        admission.expires_at - timedelta(microseconds=500)
+        if waited_stage == "sub-millisecond"
+        else now
+    ]
+    engine = _CommitTrackingEngine()
+    lineage: list[object] = []
+
+    class _Clock:
+        @staticmethod
+        def now(_: object) -> datetime:
+            return current[0]
+
+    class _WaitUntilExpiry(_MatchingTargetResolver):
+        def lock_and_resolve(self, connection: object, item: object) -> TargetSet:
+            if waited_stage == "targets":
+                current[0] = admission.expires_at
+            return super().lock_and_resolve(connection, item)
+
+    begin = engine.begin
+
+    def connect_after_wait() -> _CommitTrackingTransaction:
+        current[0] = admission.expires_at
+        return begin()
+
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.datetime", _Clock)
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _WaitUntilExpiry
+    )
+    if waited_stage == "connection":
+        monkeypatch.setattr(engine, "begin", connect_after_wait)
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event", lambda event, **_: lineage.append(event)
+    )
+
+    with pytest.raises(PermissionError, match="admission has expired"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            audit_sink=_NoopAuditSink(),
+        )
+
+    assert engine.transaction.rolled_back
+    assert not engine.transaction.committed
+    assert not any(
+        sql.lstrip().startswith(("INSERT", "UPDATE")) or "record_apply_result" in sql
+        for sql, _ in engine.transaction.connection.calls
+    )
+    assert [event.kind for event in lineage] == ["apply_failed"]  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("waited_statement", "two_tables"),
+    [("INSERT INTO", False), ("INSERT INTO", True), ("record_apply_result", False)],
+)
+def test_apply_rolls_back_when_admission_expires_during_a_write(
+    monkeypatch: pytest.MonkeyPatch, waited_statement: str, two_tables: bool
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    requests = (("fact_orders.total_amount.completeness", "quarantine_nulls"),)
+    if two_tables:
+        requests += (("fact_order_items.product_sk.referential_integrity", "quarantine_orphans"),)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now, requests)
+    current = [now]
+    engine = _CommitTrackingEngine()
+    execute = engine.transaction.connection.execute
+    lineage: list[object] = []
+
+    class _Clock:
+        @staticmethod
+        def now(_: object) -> datetime:
+            return current[0]
+
+    def execute_after_wait(statement: object, params: dict[str, object] | None = None) -> object:
+        result = execute(statement, params)
+        if waited_statement in str(statement):
+            current[0] = admission.expires_at
+        return result
+
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.datetime", _Clock)
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(engine.transaction.connection, "execute", execute_after_wait)
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event", lambda event, **_: lineage.append(event)
+    )
+
+    with pytest.raises(PermissionError, match="admission has expired"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            audit_sink=_NoopAuditSink(),
+        )
+
+    assert engine.transaction.rolled_back
+    assert not engine.transaction.committed
+    assert any(sql.startswith("INSERT INTO") for sql, _ in engine.transaction.connection.calls)
+    if two_tables:
+        assert len(plan.items) == 2
+        assert (
+            sum(sql.startswith("INSERT INTO") for sql, _ in engine.transaction.connection.calls)
+            == 1
+        )
+    if waited_statement == "INSERT INTO":
+        assert not any(
+            "record_apply_result" in sql for sql, _ in engine.transaction.connection.calls
+        )
+    assert [event.kind for event in lineage] == ["apply_failed"]  # type: ignore[attr-defined]
 
 
 def test_dry_run_retains_applied_steps_on_the_result(
@@ -894,8 +1027,10 @@ def test_serialization_failure_without_committed_result_reports_unknown(
     assert "apply_failed" not in kinds
 
 
+@pytest.mark.parametrize("waited_stage", ["before", "connection"])
 def test_expired_admission_with_committed_result_returns_it_read_only(
     monkeypatch: pytest.MonkeyPatch,
+    waited_stage: str,
 ) -> None:
     now = datetime(2026, 8, 30, tzinfo=UTC)
     plan, evaluation, admission, report = _approved_quarantine_plan(now)
@@ -928,6 +1063,21 @@ def test_expired_admission_with_committed_result_returns_it_read_only(
     )
     inserts_after_first = len(engine.mutation_sqls())
     expired = now + timedelta(hours=25)
+    if waited_stage == "connection":
+        current = [now]
+        begin = engine.begin
+
+        class _Clock:
+            @staticmethod
+            def now(_: object) -> datetime:
+                return current[0]
+
+        def connect_after_wait() -> _RecoveryTransaction:
+            current[0] = expired
+            return begin()
+
+        monkeypatch.setattr("airflow_dq_agent.apply.executor.datetime", _Clock)
+        monkeypatch.setattr(engine, "begin", connect_after_wait)
 
     second = apply_plan(
         plan,
@@ -936,7 +1086,7 @@ def test_expired_admission_with_committed_result_returns_it_read_only(
         report=report,
         dry_run=False,
         engine=engine,  # type: ignore[arg-type]
-        now=expired,
+        now=expired if waited_stage == "before" else None,
         run_id="unit-expiry-second",
         audit_sink=_ListSink(),
     )

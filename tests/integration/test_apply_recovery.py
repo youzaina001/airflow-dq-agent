@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from collections.abc import Iterator
+from datetime import timedelta
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from airflow_dq_agent.adoption import (
     RestrictedCredentials,
@@ -73,6 +75,8 @@ def required_warehouse_dsn() -> Iterator[str]:
 
 def _admitted_plan(
     warehouse_dsn: str,
+    *,
+    ttl: timedelta = timedelta(hours=24),
 ) -> tuple[object, object, object, object, RestrictedCredentials]:
     """Provision schema and logins, then drive suite → plan → audited decision → admission."""
     apply_governance_schema(warehouse_dsn)
@@ -95,7 +99,7 @@ def _admitted_plan(
     evaluation_audit_event = evaluation_event(plan, evaluation, plan_audit_event)
     append_event(evaluation_audit_event)
     evaluation = evaluation.model_copy(update={"audit_event_id": evaluation_audit_event.event_id})
-    review = build_approval_review(plan, evaluation)
+    review = build_approval_review(plan, evaluation, ttl=ttl)
     review_audit_event = review_event(review, evaluation, evaluation_audit_event)
     append_event(review_audit_event, dsn=credentials.audit_dsn, mirror_postgres=True)
     decision = HumanDecision(
@@ -130,6 +134,7 @@ def _admitted_plan(
         audited_decision,
         report=report,
         audit_repository=audit_repository,
+        ttl=ttl,
     )
     return plan, evaluation, admission, report, credentials
 
@@ -144,6 +149,119 @@ def _apply_log_rows(connection: object, admission_id: str) -> list[tuple[object,
             {"admission_id": admission_id},
         )
     )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("waited_stage", "lock_statement"),
+    [
+        ("target", "LOCK TABLE warehouse.fact_orders IN ACCESS EXCLUSIVE MODE"),
+        ("result", "LOCK TABLE dq.apply_log IN SHARE MODE"),
+    ],
+)
+def test_admission_deadline_cancels_a_real_wait_without_committing(
+    required_warehouse_dsn: str,
+    waited_stage: str,
+    lock_statement: str,
+) -> None:
+    plan, evaluation, admission, report, credentials = _admitted_plan(
+        required_warehouse_dsn, ttl=timedelta(seconds=3)
+    )
+    owner = make_engine(required_warehouse_dsn)
+    apply_engine = make_engine(credentials.apply_dsn)
+    errors: list[BaseException] = []
+    run_id = f"expiry-{waited_stage}-wait"
+    checksum = text(
+        "SELECT md5(string_agg(row_to_json(t)::text, ',' ORDER BY order_id)) "
+        "FROM warehouse.fact_orders t"
+    )
+
+    def attempt() -> None:
+        try:
+            apply_plan(
+                plan,
+                evaluation,
+                admission,
+                report=report,
+                dry_run=False,
+                engine=apply_engine,
+                run_id=run_id,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=attempt)
+    with owner.connect() as blocker:
+        original_source = blocker.execute(checksum).scalar_one()
+        blocker_pid = blocker.execute(text("SELECT pg_backend_pid()")).scalar_one()
+        blocker.execute(text(lock_statement))
+        try:
+            worker.start()
+            observed_wait = False
+            deadline = time.monotonic() + 2
+            with owner.connect() as observer:
+                while worker.is_alive() and time.monotonic() < deadline:
+                    observed_wait = observer.execute(
+                        text(
+                            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a "
+                            "WHERE a.usename = 'dq_apply_login' AND a.wait_event_type = 'Lock' "
+                            "AND :blocker_pid = ANY(pg_blocking_pids(a.pid)) "
+                            "AND a.query LIKE :waited_query)"
+                        ),
+                        {
+                            "blocker_pid": blocker_pid,
+                            "waited_query": "%record_apply_result%"
+                            if waited_stage == "result"
+                            else '%FROM "warehouse"."fact_orders"%',
+                        },
+                    ).scalar_one()
+                    observer.commit()
+                    if observed_wait:
+                        break
+                    time.sleep(0.01)
+            assert observed_wait, "the restricted apply must reach a real PostgreSQL wait"
+            worker.join(timeout=4)
+            assert not worker.is_alive(), "database wait exceeded the admission lifetime"
+        finally:
+            blocker.rollback()
+            worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert getattr(getattr(errors[0], "orig", None), "sqlstate", None) in {"57014", "55P03"}
+    with owner.connect() as connection:
+        assert connection.execute(checksum).scalar_one() == original_source
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM dq.quarantine_rows WHERE run_id = :run_id"),
+                {"run_id": run_id},
+            ).scalar_one()
+            == 0
+        )
+        assert _apply_log_rows(connection, admission.admission_id) == []
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM dq.traces WHERE kind = 'apply_succeeded' "
+                    "AND body ->> 'quality_run_id' = :quality_run_id"
+                ),
+                {"quality_run_id": report.run_id},
+            ).scalar_one()
+            == 0
+        )
+    with apply_engine.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT dq.admission_consumed(:admission_id)"),
+                {"admission_id": admission.admission_id},
+            ).scalar_one()
+            is False
+        )
+        assert (
+            connection.execute(
+                text("SELECT has_table_privilege(current_user, 'warehouse.fact_orders', 'UPDATE')")
+            ).scalar_one()
+            is False
+        )
 
 
 @pytest.mark.integration
@@ -170,14 +288,46 @@ def test_repeated_apply_returns_the_original_committed_result(
         dsn=credentials.apply_dsn,
         run_id="recovery-second",
     )
+    expired_sql: list[str] = []
+    expired_engine = make_engine(credentials.apply_dsn)
 
-    assert second.apply_result_id == first.apply_result_id
-    assert second.fingerprint == first.fingerprint
-    assert second.audit_event_id == first.audit_event_id
-    assert second.run_id == first.run_id
-    assert [
-        (step.rendered.action_id, step.estimated_rows, step.rowcount) for step in second.steps
-    ] == [(step.rendered.action_id, step.estimated_rows, step.rowcount) for step in first.steps]
+    def capture_sql(
+        connection: object,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        expired_sql.append(statement)
+
+    event.listen(expired_engine, "before_cursor_execute", capture_sql)
+    expired = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=expired_engine,
+        run_id="recovery-expired",
+        now=admission.expires_at + timedelta(seconds=1),
+    )
+
+    for recovered in (second, expired):
+        assert recovered.apply_result_id == first.apply_result_id
+        assert recovered.fingerprint == first.fingerprint
+        assert recovered.audit_event_id == first.audit_event_id
+        assert recovered.run_id == first.run_id
+        assert [
+            (step.rendered.action_id, step.estimated_rows, step.rowcount)
+            for step in recovered.steps
+        ] == [(step.rendered.action_id, step.estimated_rows, step.rowcount) for step in first.steps]
+    assert "SET TRANSACTION READ ONLY" in expired_sql
+    assert any("committed_apply_result" in sql for sql in expired_sql)
+    assert not any(
+        sql.lstrip().startswith(("INSERT", "UPDATE")) or "record_apply_result" in sql
+        for sql in expired_sql
+    )
 
     with make_engine(required_warehouse_dsn).connect() as connection:
         rows = _apply_log_rows(connection, admission.admission_id)
@@ -191,6 +341,10 @@ def test_repeated_apply_returns_the_original_committed_result(
             text("SELECT count(*) FROM dq.quarantine_rows WHERE run_id = :run_id"),
             {"run_id": "recovery-second"},
         ).scalar_one()
+        expired_copied = connection.execute(
+            text("SELECT count(*) FROM dq.quarantine_rows WHERE run_id = :run_id"),
+            {"run_id": "recovery-expired"},
+        ).scalar_one()
         failures = connection.execute(
             text(
                 "SELECT count(*) FROM dq.traces WHERE kind = 'apply_failed' "
@@ -203,6 +357,7 @@ def test_repeated_apply_returns_the_original_committed_result(
         for item in plan.items  # type: ignore[union-attr]
     )
     assert stray == 0
+    assert expired_copied == 0
     assert failures == 0
 
 

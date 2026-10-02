@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
@@ -49,6 +49,28 @@ logger = logging.getLogger(__name__)
 
 class _AdmissionConsumed(PermissionError):
     """Raised in-transaction when the admission already carries a committed result."""
+
+
+class _AdmissionExpired(PermissionError):
+    """Raised when unconsumed authority cannot cover another controlled statement."""
+
+
+def _remaining_admission_ms(admission: ApplyAdmission, now: datetime | None) -> int:
+    remaining = (admission.expires_at - (now or datetime.now(UTC))) // timedelta(milliseconds=1)
+    if remaining <= 0:
+        raise _AdmissionExpired("Refusing apply: apply admission has expired")
+    return min(remaining, 2_147_483_647)
+
+
+def _set_admission_deadline(
+    connection: object, admission: ApplyAdmission, now: datetime | None
+) -> None:
+    # Zero disables PostgreSQL's timeout; refuse a sub-millisecond budget instead.
+    remaining_ms = _remaining_admission_ms(admission, now)
+    connection.execute(  # type: ignore[attr-defined]
+        text("SELECT set_config('statement_timeout', :timeout, true)"),
+        {"timeout": f"{remaining_ms}ms"},
+    )
 
 
 def _is_serialization_failure(exc: BaseException) -> bool:
@@ -408,7 +430,7 @@ def apply_plan(
     database = engine or make_engine(dsn or get_settings().apply_dsn)
     if not dry_run:
         assert admission is not None
-        if applied_at > admission.expires_at:
+        if applied_at >= admission.expires_at:
             try:
                 recovered = _recover_committed_result(
                     database, plan=plan, evaluation=evaluation, admission=admission
@@ -437,6 +459,7 @@ def apply_plan(
             _set_controlled_transaction_mode(connection, dry_run=dry_run)
             if not dry_run:
                 assert admission is not None
+                _set_admission_deadline(connection, admission, now)
                 _require_plan_admission(
                     plan,
                     evaluation,
@@ -445,6 +468,9 @@ def apply_plan(
                     connection=connection,
                 )
             for item in executable:
+                if not dry_run:
+                    assert admission is not None
+                    _set_admission_deadline(connection, admission, now)
                 actual_targets = (
                     resolver.resolve_item(connection, item)
                     if dry_run
@@ -468,6 +494,8 @@ def apply_plan(
                     )
                     continue
                 rowcount: int | None = 0
+                assert admission is not None
+                _set_admission_deadline(connection, admission, now)
                 if action.mutates:
                     mutation = connection.execute(text(rendered.sql), rendered.params)
                     rowcount = int(mutation.rowcount) if mutation.rowcount is not None else None
@@ -499,6 +527,7 @@ def apply_plan(
             result.audit_event_id = event.event_id
             if not dry_run:
                 assert admission is not None
+                _set_admission_deadline(connection, admission, now)
                 try:
                     _record_apply_result(
                         connection, event=event, result=result, plan=plan, admission=admission
@@ -507,16 +536,27 @@ def apply_plan(
                     raise _AdmissionConsumed(
                         "Refusing apply: apply admission has already been consumed"
                     ) from exc
+                _remaining_admission_ms(admission, now)
         if dry_run:
             assert event is not None
             append_event(event)
-    except _AdmissionConsumed as exc:
+    except (_AdmissionConsumed, _AdmissionExpired) as exc:
         assert admission is not None
         recovered = _recover_committed_result(
             database, plan=plan, evaluation=evaluation, admission=admission
         )
         if recovered is not None:
             return recovered
+        if isinstance(exc, _AdmissionExpired):
+            _emit_apply_failed(
+                plan,
+                evaluation,
+                admission,
+                result=result,
+                resolved_run_id=resolved_run_id,
+                dry_run=dry_run,
+            )
+            raise
         raise PermissionError(
             "Refusing apply: apply admission has already been consumed and its "
             "committed result could not be recovered"
