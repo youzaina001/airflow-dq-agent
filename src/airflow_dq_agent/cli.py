@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pydantic import BaseModel
 
 from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
+from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.models import (
     CandidateAction,
     EvalReport,
@@ -18,9 +19,12 @@ from airflow_dq_agent.contracts.models import (
 )
 from airflow_dq_agent.demo import green_report, register_demo, seed_warehouse, seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
+from airflow_dq_agent.planning.integrity import verify_report_integrity
+from airflow_dq_agent.planning.preparation import CandidateEvaluationFailed, prepare_plan_review
+from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality.sanitize import sample_free_report
 from airflow_dq_agent.quality.suite import run_quality_suite
-from airflow_dq_agent.traces import trace_agent_run
+from airflow_dq_agent.traces import append_event, candidate_proposal_event, trace_agent_run
 
 
 def _report(no_db: bool) -> QualitySuiteReport:
@@ -123,6 +127,38 @@ def command_demo(no_db: bool) -> int:
     return 0
 
 
+def command_shadow() -> int:
+    """Record an evaluated review without a Human Decision or Apply Admission."""
+    settings = get_settings()
+    report = run_quality_suite(settings.read_dsn or settings.warehouse_dsn)
+    _print_suite_outcome(report)
+    if report.incomplete:
+        return 2
+    verify_report_integrity(report, refusing="candidate audit")
+    if report.audit_event_id is None:
+        raise RuntimeError("quality report has no persisted audit root")
+    proposal = Proposal.model_validate(
+        safe_proposal_for_xcom(report, run_proposal_agent(report).proposal)
+    )
+    candidate = candidate_proposal_event(report, proposal, report.audit_event_id)
+    append_event(candidate)
+    try:
+        prepared = prepare_plan_review(
+            report,
+            proposal,
+            candidate_evaluation=evaluate_proposal(report, proposal),
+            candidate_event_id=candidate.event_id,
+            target_sets=PostgresTargetSetResolver(dsn=settings.read_dsn or settings.warehouse_dsn),
+            persist=append_event,
+            ttl=settings.apply_admission_ttl,
+        )
+    except CandidateEvaluationFailed as exc:
+        print(str(exc))
+        return 1
+    _print_json(prepared)
+    return _quality_exit(report, evaluation_blocked=not prepared["evaluation"]["passed"])
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Governed Airflow data-quality operator",
@@ -136,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  eval: exit 0 completed all-pass with passing evaluation; "
             "exit 1 completed quality failure or blocked evaluation; "
             "exit 2 setup or incomplete-check errors.\n"
+            "  shadow: exit 0 completed all-pass; exit 1 quality failure or blocked evaluation; "
+            "exit 2 setup or incomplete-check errors.\n"
             "  demo: exit 0 on a successful demonstration; "
             "exit 2 for setup or incomplete-check errors.\n"
             "  seed: exit 0 after recreating the warehouse."
@@ -143,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("seed", help="recreate the deterministic local warehouse")
+    subcommands.add_parser(
+        "shadow", help="persist a sample-free evaluated demo Remediation Plan review"
+    )
     for name in ("suite", "propose", "eval", "demo"):
         command = subcommands.add_parser(name)
         command.add_argument(
@@ -159,6 +200,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("seeded warehouse with deterministic quality defects")
         return 0
     try:
+        if args.command == "shadow":
+            return command_shadow()
         if args.command == "demo":
             return command_demo(args.no_db)
         report = _report(args.no_db)
