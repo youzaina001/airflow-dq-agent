@@ -374,6 +374,64 @@ def test_apply_rolls_back_when_admission_expires_during_a_write(
     assert [event.kind for event in lineage] == ["apply_failed"]  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize("waited_stage", ["mutation", "result"])
+def test_apply_refuses_expiry_during_timeout_setup_without_attempting_the_write(
+    monkeypatch: pytest.MonkeyPatch, waited_stage: str
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    current = [now]
+    targets_resolved = [False]
+    engine = _CommitTrackingEngine()
+    connection = engine.transaction.connection
+    execute = connection.execute
+
+    class _Clock:
+        @staticmethod
+        def now(_: object) -> datetime:
+            return current[0]
+
+    class _ResolvedTargets(_MatchingTargetResolver):
+        def lock_and_resolve(self, connection: object, item: object) -> TargetSet:
+            targets_resolved[0] = True
+            return super().lock_and_resolve(connection, item)
+
+    def execute_after_wait(statement: object, params: dict[str, object] | None = None) -> object:
+        result = execute(statement, params)
+        mutation_attempted = any(sql.startswith("INSERT INTO") for sql, _ in connection.calls)
+        if (
+            "set_config" in str(statement)
+            and targets_resolved[0]
+            and (waited_stage == "mutation" or mutation_attempted)
+        ):
+            current[0] = admission.expires_at
+        return result
+
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.datetime", _Clock)
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _ResolvedTargets
+    )
+    monkeypatch.setattr(connection, "execute", execute_after_wait)
+    monkeypatch.setattr("airflow_dq_agent.apply.executor.append_event", lambda *_: None)
+
+    with pytest.raises(PermissionError, match="admission has expired"):
+        apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            audit_sink=_NoopAuditSink(),
+        )
+
+    assert engine.transaction.rolled_back
+    assert not engine.transaction.committed
+    assert not any("record_apply_result" in sql for sql, _ in connection.calls)
+    if waited_stage == "mutation":
+        assert not any(sql.startswith("INSERT INTO") for sql, _ in connection.calls)
+
+
 def test_dry_run_retains_applied_steps_on_the_result(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -71,6 +71,7 @@ def _set_admission_deadline(
         text("SELECT set_config('statement_timeout', :timeout, true)"),
         {"timeout": f"{remaining_ms}ms"},
     )
+    _remaining_admission_ms(admission, now)
 
 
 def _is_serialization_failure(exc: BaseException) -> bool:
