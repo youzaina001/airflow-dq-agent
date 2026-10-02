@@ -10,7 +10,7 @@ export WAREHOUSE_DSN ?= postgresql+psycopg://dq:dq@localhost:5433/warehouse
 export TRACES_DIR ?= traces
 OCR ?= ocr
 
-.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install hooks ci catalog compose-smoke review-preview review review-branch compose-hitl
+.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install hooks ci catalog compose-smoke compose-shadow review-preview review review-branch compose-hitl
 
 help:
 	@echo "make install   - editable install with dev extras (no Airflow); enable commit-msg hook"
@@ -25,6 +25,7 @@ help:
 	@echo "make check     - lint, typecheck, and unit tests"
 	@echo "make catalog   - run the bundled demo FastMCP catalog server"
 	@echo "make compose-smoke - deterministic stub/shadow Compose DAG smoke test"
+	@echo "make compose-shadow - configured CLI and actual Airflow shadow proof"
 	@echo "make compose-hitl  - actual Airflow Reject/Timeout/crash-retry proof"
 	@echo "make review-preview - list files OCR would review (no LLM call)"
 	@echo "make review    - AI-review the workspace diff via OpenCodeReview"
@@ -69,6 +70,9 @@ catalog:
 
 compose-smoke:
 	bash scripts/compose-smoke.sh
+
+compose-shadow:
+	bash scripts/compose-shadow.sh
 
 compose-hitl:
 	bash scripts/compose-hitl-reject-timeout.sh
