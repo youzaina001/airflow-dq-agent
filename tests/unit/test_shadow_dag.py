@@ -11,6 +11,7 @@ from typing import Any
 
 import polars as pl
 import pytest
+import yaml
 
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import AuditEvent, QualitySuiteReport, TargetSet
@@ -114,15 +115,57 @@ def _load(
 
 
 def test_shadow_dag_is_idle_without_a_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    source = DAG_PATH.read_text(encoding="utf-8")
-    assert "register_demo" not in source
-    assert "create_apply_admission" not in source
-    assert "AuditedApprovalOperator" not in source
-    assert "prepare_plan_review" in source
     monkeypatch.delenv("REGISTRY_PATH", raising=False)
     module, tasks = _load(monkeypatch, "dq_shadow_idle")
     assert module.dq_shadow is None
     assert tasks == {}
+
+
+def test_compose_passes_the_selected_registry_to_airflow_services() -> None:
+    compose = yaml.safe_load((REPO / "docker-compose.yaml").read_text(encoding="utf-8"))
+    for service in (
+        "airflow-apiserver",
+        "airflow-dag-processor",
+        "airflow-scheduler",
+        "airflow-triggerer",
+    ):
+        environment = compose["services"][service]["environment"]
+        assert "REGISTRY_PATH" in environment
+        assert environment["REGISTRY_PATH"] is None
+
+
+@pytest.mark.parametrize("shadow_first", [True, False])
+def test_selected_registry_is_exclusive_when_bundled_dags_are_imported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shadow_first: bool
+) -> None:
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(INVOICE_REGISTRY, encoding="utf-8")
+    monkeypatch.setenv("REGISTRY_PATH", str(registry))
+    monkeypatch.setenv("APPLY_MODE", "off")
+    monkeypatch.setenv("TRACE_POSTGRES", "true")
+    monkeypatch.setenv("READ_DSN", "postgresql+psycopg://reader:x@localhost/warehouse")
+    monkeypatch.setenv("AUDIT_DSN", "postgresql+psycopg://auditor:x@localhost/warehouse")
+    TABLE_CONTRACTS.clear()
+    CHECK_SPECS.clear()
+    tasks = _stub_airflow(monkeypatch)
+    monkeypatch.setattr(
+        "airflow_dq_agent.airflow_hitl.AuditedApprovalOperator",
+        lambda **_kwargs: types.SimpleNamespace(output=None),
+    )
+    paths = [REPO / "dags/dq_daily.py", REPO / "examples/dq_external_invoice.py"]
+    paths.insert(0 if shadow_first else len(paths), DAG_PATH)
+    for index, path in enumerate(paths):
+        spec = importlib.util.spec_from_file_location(f"selected_registry_{index}", path)
+        assert spec is not None and spec.loader is not None
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    assert set(TABLE_CONTRACTS) == {"invoice"}
+    assert set(CHECK_SPECS) == {"invoice.amount.completeness"}
+    assert set(tasks) == {
+        "run_suite_task",
+        "propose_task",
+        "audit_candidate_task",
+        "prepare_plan_task",
+    }
 
 
 def _invoice_report() -> QualitySuiteReport:

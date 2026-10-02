@@ -9,8 +9,9 @@ from sqlalchemy.engine import make_url
 
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.config import Settings
-from airflow_dq_agent.contracts.models import ApprovalReview
+from airflow_dq_agent.contracts.models import ApprovalReview, NonExecutablePlanItem, RemediationPlan
 from airflow_dq_agent.contracts.tables import get_table_contract
+from airflow_dq_agent.quality.registry import get_check_spec
 
 EMPTY_SUITE = (
     "suite: incomplete: 0 passed, 0 failed, 0 errors; no checks ran\n"
@@ -40,8 +41,8 @@ def configuration_error(settings: Settings) -> str | None:
 def render_shadow_review(prepared: Mapping[str, Any]) -> str:
     """Lead with the adopter effect; keep fingerprints as audit details."""
     review = ApprovalReview.model_validate(prepared["approval_review"])
-    plan = prepared["plan"]
-    reasons = plan.get("blocked_reasons", []) if isinstance(plan, dict) else []
+    plan = RemediationPlan.model_validate(prepared["plan"])
+    reasons = plan.blocked_reasons
     lines = ["Shadow Review"]
     if review.items:
         for item in review.items:
@@ -54,7 +55,26 @@ def render_shadow_review(prepared: Mapping[str, Any]) -> str:
             lines.append(
                 "Reversibility: " + ("reversible" if item.reversible else "not reversible")
             )
-    else:
+    for blocked_item in plan.items:
+        if not isinstance(blocked_item, NonExecutablePlanItem):
+            continue
+        tables = sorted(
+            {
+                get_table_contract(get_check_spec(e.check_id).table).qualified
+                for e in blocked_item.evidence
+            }
+        )
+        lines.extend(
+            [
+                f"Table: {', '.join(tables)}",
+                f"Failed checks: {', '.join(e.check_id for e in blocked_item.evidence)}",
+                "Proposed effect: unavailable (blocked)",
+                "Exact target count: unavailable (blocked)",
+                "Risk: unavailable (blocked)",
+                "Reversibility: unavailable (blocked)",
+            ]
+        )
+    if not plan.items:
         lines.extend(
             [
                 "Table: none",

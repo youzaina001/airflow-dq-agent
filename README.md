@@ -169,6 +169,9 @@ python -m airflow_dq_agent.cli shadow --registry examples/my_warehouse.yaml
 `dags/dq_shadow.py` is the same journey when `REGISTRY_PATH` points at that file. It
 does not load the demo catalog and it does not register a Human Decision or apply
 task. Leave `REGISTRY_PATH` unset and the file stays idle.
+Selecting `REGISTRY_PATH` keeps `dq_daily` and the external-invoice example idle so
+their catalogs cannot mix with the adopter registry. Compose passes the selected
+container path to every Airflow service; mount the registry under `config/`.
 
 - Exit 0: every check passed and no remediation was required.
 - Exit 1: the suite found failures, or the review evaluation did not pass. A passing
@@ -181,6 +184,16 @@ task. Leave `REGISTRY_PATH` unset and the file stays idle.
 A table without a single-column primary key is refused when the registry loads (exit 2),
 for example `invoice does not have a single-column primary key`. A plan that loads and
 then blocks is exit 1 and tells you not to request a Human Decision.
+An unresolved target set keeps the failed-check evidence visible and reports the
+target count as unavailable; it does not mean there are zero affected rows.
+
+`make compose-shadow` runs the configured CLI and actual Airflow DAG against a fresh
+disposable PostgreSQL database with distinct restricted read and audit logins. It
+checks both report-to-review lineages, unchanged source rows, and zero quarantine
+or apply records. CI requires this proof; the task-body integration test uses
+Airflow stubs and is supplementary. A skipped or failed Compose run leaves this
+acceptance incomplete. The script leaves the Compose services and disposable
+database available for inspection.
 
 ## External invoice example (restricted credentials)
 

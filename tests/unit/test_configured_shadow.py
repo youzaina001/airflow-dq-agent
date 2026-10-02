@@ -259,3 +259,33 @@ def test_passing_shadow_review_leads_with_the_adopter_effect(
     ]
     assert events[0].predecessor_ids == ["existing-root"]
     assert "fact_orders.total_amount.completeness" not in CHECK_SPECS
+
+
+def test_unresolved_targets_keep_failed_check_evidence_in_the_shadow_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _write(tmp_path, INVOICE_REGISTRY)
+    _configure(monkeypatch, path)
+
+    class Targets:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def resolve(self, **_: object) -> TargetSet:
+            raise ValueError("private database detail")
+
+    monkeypatch.setattr("airflow_dq_agent.cli.run_quality_suite", lambda _dsn: _invoice_report())
+    monkeypatch.setattr("airflow_dq_agent.cli.append_event", lambda _event: None)
+    monkeypatch.setattr("airflow_dq_agent.cli.PostgresTargetSetResolver", Targets)
+    assert main(["shadow", "--registry", str(path)]) == 1
+    output = capsys.readouterr().out
+    head = output.split("Audit details:", maxsplit=1)[0]
+    assert "Table: billing.invoice" in head
+    assert "Failed checks: invoice.amount.completeness" in head
+    assert "Exact target count: unavailable" in head
+    assert "remediation target set could not be resolved" in head
+    assert "do not request a Human Decision" in head
+    assert "Table: none" not in head
+    assert "Failed checks: none" not in head
+    assert "Exact target count: 0" not in head
+    assert "private database detail" not in output
