@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Walkthrough — governed data quality</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c1915;
+      --muted: #5c564c;
+      --paper: #f7f4ee;
+      --card: #fffdf8;
+      --line: #e4dccf;
+      --accent: #0f6e56;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); }
+    a:hover { text-decoration: none; }
+    header, main, footer { width: min(42rem, calc(100% - 2rem)); margin-inline: auto; }
+    header { padding: 1.25rem 0 0.5rem; }
+    nav { font-family: "Segoe UI", Helvetica, Arial, sans-serif; font-size: 0.92rem; }
+    nav a { margin-right: 1rem; }
+    nav a[aria-current="page"] { color: var(--ink); text-decoration: none; font-weight: 650; }
+    h1 { font-size: 2rem; line-height: 1.2; margin: 0.6rem 0 0.4rem; }
+    h2 { font-size: 1.25rem; margin: 1.6rem 0 0.4rem; }
+    p, li { font-size: 1.05rem; }
+    .lede { font-size: 1.15rem; }
+    .note {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      padding: 0.8rem 1rem;
+      margin: 1.25rem 0;
+    }
+    pre {
+      background: var(--card);
+      border: 1px solid var(--line);
+      padding: 0.8rem 1rem;
+      overflow-x: auto;
+      font-family: "IBM Plex Mono", "Source Code Pro", ui-monospace, monospace;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    code { font-family: "IBM Plex Mono", "Source Code Pro", ui-monospace, monospace; font-size: 0.92em; }
+    footer {
+      font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 0.92rem;
+      color: var(--muted);
+      padding: 1.5rem 0 2.5rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="index.html">Landing</a>
+      <a href="walkthrough.html" aria-current="page">Walkthrough</a>
+    </nav>
+    <h1>Walkthrough</h1>
+    <p class="lede">The reader creates a Neon project, runs one local setup command, then tries CLI Shadow Review and local Airflow. Nothing on this page is a connection string or a role password.</p>
+  </header>
+  <main>
+    <h2>1. Create the project you own</h2>
+    <p>The reader creates and owns the Neon project on the free plan and adds no payment method, so a quota breach suspends the project instead of charging them. Free-plan compute scales to zero after 5 minutes and cannot be disabled. The reader controls the lifecycle of that project (keep, suspend, or delete it).</p>
+    <p>Keep the owner connection string on the reader's machine. Do not send it to this site, and do not add a payment method to keep the project from being suspended.</p>
+
+    <h2>2. Run setup</h2>
+    <p><code>setup</code> is a local command. It requires <code>--dsn</code> and the owner connection string. It does not fall back to the process warehouse setting. It does not call a Neon API. Invoke it as:</p>
+    <pre>dq-agent setup --dsn &lt;owner connection string&gt;</pre>
+    <p>Success is exit 0, and only after schema install, synthetic warehouse seed, and restricted-login provisioning have all finished. Standard output is exactly these four lines:</p>
+    <pre>setup: ready
+read: &lt;read connection string&gt;
+audit: &lt;audit connection string&gt;
+apply: &lt;apply connection string&gt;</pre>
+    <p>The three login lines are distinct. The connection string and the generated role passwords stay on the reader's machine. This page does not show them.</p>
+    <p>A missing or refused connection string exits 2. Standard output is exactly the following line. There is no <code>setup: ready</code> line and there are no login lines.</p>
+    <pre>command: incomplete: setup or execution error</pre>
+
+    <h2>3. Run setup again</h2>
+    <p>A second successful run recreates the synthetic warehouse and replaces the three login passwords. Passwords from the previous run no longer work. The new login lines are again only on the reader's machine.</p>
+
+    <h2>4. What seed still does</h2>
+    <p><code>seed</code> still recreates the local warehouse from the process warehouse setting. Invoke it as <code>dq-agent seed</code>. It does not take a connection string, and it does not print login passwords. It is not a substitute for <code>setup</code>.</p>
+
+    <h2>5. CLI Shadow Review</h2>
+    <p>Use the printed read and audit logins for the process. Set <code>READ_DSN</code> to the printed read line and <code>AUDIT_DSN</code> to the printed audit line. Set <code>TRACE_POSTGRES=true</code> so the review is written to PostgreSQL. Leave apply off (<code>APPLY_MODE=off</code>). Use the stub Candidate Proposal (<code>LLM_MODE=stub</code>, the default). Load one demo catalog for the process: run <code>dq-agent shadow</code> with no registry argument, so this process does not also load an adopter registry.</p>
+    <p>That review records PostgreSQL Audit Lineage through the audit login. It is an evaluated, sample-free Remediation Plan review. Quality Evidence from the failed checks is what a Remediation Plan may use. Check Policy remains the reviewed law for what may be compiled. The review does not take a Human Decision and does not create an Apply Admission.</p>
+    <p>A JSONL-only trace is a local demonstration, not a completed PostgreSQL Shadow Review. Leaving PostgreSQL tracing off (<code>TRACE_POSTGRES=false</code>) is that JSONL-only case.</p>
+
+    <h2>6. Local Airflow for the synthetic daily demo</h2>
+    <p>Local Airflow runs the synthetic daily demo in <code>dags/dq_daily.py</code>. The interface, scheduler, and metadata database stay on the reader's machine. Point the warehouse at the reader's Neon project by setting <code>READ_DSN</code> to the printed read line. If <code>READ_DSN</code> is unset, that demo uses <code>WAREHOUSE_DSN</code>, so set that to the same printed read line instead. Do not leave either setting on a different database. This release includes no hosted Airflow service and no custom domain.</p>
+
+    <h2>7. Human Decision and apply</h2>
+    <p>Human Decision and apply stay on the existing external-invoice example, <code>examples/dq_external_invoice.py</code>. Do not turn the synthetic daily demo into that journey by swapping its catalog. <code>setup</code> does not prepare that example: it does not seed the external-invoice table and it does not load that catalog.</p>
+    <p>Apply in this release is Quarantine only. Quarantine is a copy of the authorized Remediation Target Set, not a repair of source rows. An Apply Admission is the durable authorization to execute one evaluated Remediation Plan after its whole-plan Human Decision. Check Policy remains the reviewed law for what may be compiled.</p>
+
+    <div class="note">
+      <p>This release does not claim a Neon project or the Pages site is already deployed. Creating the Cloudflare Pages project and attaching it to <code>master</code> is a dashboard action and has not been done.</p>
+    </div>
+  </main>
+  <footer>
+    <p><a href="index.html">Back to the landing page</a>. Static HTML on the existing <code>master</code> branch. No branch rename.</p>
+  </footer>
+</body>
+</html>

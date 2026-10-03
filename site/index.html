@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Governed data quality — a local walkthrough</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c1915;
+      --muted: #5c564c;
+      --paper: #f7f4ee;
+      --card: #fffdf8;
+      --line: #e4dccf;
+      --accent: #0f6e56;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); }
+    a:hover { text-decoration: none; }
+    header, main, footer { width: min(42rem, calc(100% - 2rem)); margin-inline: auto; }
+    header { padding: 1.25rem 0 0.5rem; }
+    nav { font-family: "Segoe UI", Helvetica, Arial, sans-serif; font-size: 0.92rem; }
+    nav a { margin-right: 1rem; }
+    nav a[aria-current="page"] { color: var(--ink); text-decoration: none; font-weight: 650; }
+    h1 { font-size: 2rem; line-height: 1.2; margin: 0.6rem 0 0.4rem; }
+    h2 { font-size: 1.25rem; margin: 1.6rem 0 0.4rem; }
+    p, li { font-size: 1.05rem; }
+    .lede { font-size: 1.15rem; }
+    .note {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      padding: 0.8rem 1rem;
+      margin: 1.25rem 0;
+    }
+    footer {
+      font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 0.92rem;
+      color: var(--muted);
+      padding: 1.5rem 0 2.5rem;
+    }
+    code { font-family: "IBM Plex Mono", "Source Code Pro", ui-monospace, monospace; font-size: 0.92em; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="index.html" aria-current="page">Landing</a>
+      <a href="walkthrough.html">Walkthrough</a>
+    </nav>
+    <h1>A local walkthrough against a database you create</h1>
+    <p class="lede">This site teaches a reader to run the governed data-quality workflow on their own machine, against a Neon project they create and own.</p>
+  </header>
+  <main>
+    <p>The reader creates and owns the Neon project on the free plan and adds no payment method, so a quota breach suspends the project instead of charging them. Free-plan compute scales to zero after 5 minutes and cannot be disabled. The reader controls the lifecycle of that project (keep, suspend, or delete it). The connection string and the generated role passwords stay on the reader's machine.</p>
+    <p>There is no hosted Airflow service and no custom domain in this release. Airflow's interface, scheduler, and metadata database stay on the reader's machine. The warehouse is the reader's Neon project. The steps are in the <a href="walkthrough.html">walkthrough</a>.</p>
+    <h2>Words for the governed path</h2>
+    <p>Quality Evidence is a reference to a specific failed check in one quality suite report. A Candidate Proposal may request remediations, but it has no authority until compilation produces a Remediation Plan. Check Policy remains the reviewed law for what may be compiled.</p>
+    <p>A CLI Shadow Review records an evaluated, sample-free Remediation Plan in PostgreSQL Audit Lineage. It does not take a Human Decision and it does not create an Apply Admission. Apply in this release is Quarantine only: a copy of the authorized Remediation Target Set, not a repair of source rows.</p>
+    <div class="note">
+      <p>This release does not claim a Neon project or the Pages site is already deployed. Creating the Cloudflare Pages project and attaching it to <code>master</code> is a dashboard action and has not been done. These pages are the static source that Cloudflare Pages would publish from the existing <code>master</code> branch. The branch is not renamed.</p>
+    </div>
+  </main>
+  <footer>
+    <p>Static HTML. No build step. No Pages project id and no account id.</p>
+  </footer>
+</body>
+</html>

@@ -8,6 +8,7 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel
 
+from airflow_dq_agent.adoption import apply_governance_schema, provision_restricted_logins
 from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.models import (
@@ -235,11 +236,18 @@ def build_parser() -> argparse.ArgumentParser:
             "--registry requires TRACE_POSTGRES=true and distinct READ_DSN and AUDIT_DSN.\n"
             "  demo: exit 0 on a successful demonstration; "
             "exit 2 for setup or incomplete-check errors.\n"
-            "  seed: exit 0 after recreating the warehouse."
+            "  seed: exit 0 after recreating the warehouse.\n"
+            "  setup: exit 0 after schema, synthetic warehouse, and restricted logins; "
+            "exit 2 when the owner connection string is missing or refused."
         ),
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("seed", help="recreate the deterministic local warehouse")
+    setup = subcommands.add_parser(
+        "setup",
+        help="install governance schema, synthetic warehouse, and restricted logins",
+    )
+    setup.add_argument("--dsn", help="owner PostgreSQL connection string")
     shadow = subcommands.add_parser(
         "shadow",
         help="record a sample-free Shadow Review without a Human Decision or Apply Admission",
@@ -256,8 +264,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _psycopg_dsn(dsn: str) -> str:
+    """Accept a Neon libpq URL. The installed driver is psycopg, not psycopg2."""
+    if dsn.startswith("postgresql://"):
+        return "postgresql+psycopg://" + dsn.removeprefix("postgresql://")
+    if dsn.startswith("postgres://"):
+        return "postgresql+psycopg://" + dsn.removeprefix("postgres://")
+    return dsn
+
+
+def command_setup(dsn: str | None) -> int:
+    if not dsn:
+        print("command: incomplete: setup or execution error")
+        return 2
+    dsn = _psycopg_dsn(dsn)
+    try:
+        apply_governance_schema(dsn)
+        seed_warehouse(dsn)
+        credentials = provision_restricted_logins(dsn)
+    except Exception:
+        print("command: incomplete: setup or execution error")
+        return 2
+    print("setup: ready")
+    print(f"read: {credentials.read_dsn}")
+    print(f"audit: {credentials.audit_dsn}")
+    print(f"apply: {credentials.apply_dsn}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "setup":
+        return command_setup(args.dsn)
     if args.command == "shadow" and args.registry:
         try:
             return command_configured_shadow(args.registry)
