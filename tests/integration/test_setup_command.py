@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from airflow_dq_agent.cli import main
+from airflow_dq_agent.traces import PostgresAuditRepository
 from airflow_dq_agent.warehouse.db import make_engine
 
 _INCOMPLETE = "command: incomplete: setup or execution error"
@@ -101,6 +104,48 @@ def test_setup_prints_distinct_logins_and_read_login_sees_known_defects(
 
 
 @pytest.mark.integration
+def test_printed_audit_login_records_shadow_lineage_without_model_credentials(
+    warehouse_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["setup", "--dsn", warehouse_dsn]) == 0
+    read_dsn, audit_dsn, _apply_dsn = _login_dsns(capsys.readouterr().out)
+    monkeypatch.setenv("READ_DSN", read_dsn)
+    monkeypatch.setenv("AUDIT_DSN", audit_dsn)
+    # Neither owner fallback nor apply credentials are available to this review.
+    for name in ("WAREHOUSE_DSN", "APPLY_DSN"):
+        monkeypatch.setenv(name, "postgresql+psycopg://unused:unused@127.0.0.1:1/unused")
+    monkeypatch.setenv("TRACE_POSTGRES", "true")
+    monkeypatch.setenv("APPLY_MODE", "off")
+    monkeypatch.setenv("LLM_MODE", "stub")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    # Known seeded defects return quality-failure status, not an execution error.
+    assert main(["shadow"]) == 1
+    output = capsys.readouterr().out
+    prepared = json.loads(output[output.index("{") :])
+    repository = PostgresAuditRepository(audit_dsn)
+    event_id = prepared["review_event_id"]
+    kinds = []
+    while event_id:
+        event = repository.get(event_id)
+        assert event is not None
+        assert event.quality_run_id == prepared["plan"]["quality_run_id"]
+        kinds.append(event.kind)
+        assert len(event.predecessor_ids) <= 1
+        event_id = event.predecessor_ids[0] if event.predecessor_ids else ""
+    assert kinds == [
+        "approval_review",
+        "evaluation",
+        "plan_compiled",
+        "candidate_proposal",
+        "quality_report",
+    ]
+
+
+@pytest.mark.integration
 def test_second_setup_replaces_passwords_and_reseeds_known_defects(
     warehouse_dsn: str,
     capsys: pytest.CaptureFixture[str],
@@ -114,11 +159,24 @@ def test_second_setup_replaces_passwords_and_reseeds_known_defects(
     assert audit_dsn != previous_audit
     assert apply_dsn != previous_apply
 
-    previous = make_engine(previous_read)
+    for previous_dsn in (previous_read, previous_audit, previous_apply):
+        previous = make_engine(previous_dsn)
+        try:
+            with pytest.raises(SQLAlchemyError), previous.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        finally:
+            previous.dispose()
+
+    for current_dsn in (read_dsn, audit_dsn, apply_dsn):
+        current = make_engine(current_dsn)
+        try:
+            with current.connect() as connection:
+                assert connection.execute(text("SELECT 1")).scalar_one() == 1
+        finally:
+            current.dispose()
+
     reader = make_engine(read_dsn)
     try:
-        with pytest.raises(SQLAlchemyError), previous.connect() as connection:
-            connection.execute(text("SELECT 1"))
         with reader.connect() as connection:
             defects = connection.execute(
                 text(
@@ -128,7 +186,6 @@ def test_second_setup_replaces_passwords_and_reseeds_known_defects(
             ).all()
         assert defects == [(101, "c101.invalid"), (102, "c102.invalid")]
     finally:
-        previous.dispose()
         reader.dispose()
 
 

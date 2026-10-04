@@ -4,59 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Walkthrough — governed data quality</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --ink: #1c1915;
-      --muted: #5c564c;
-      --paper: #f7f4ee;
-      --card: #fffdf8;
-      --line: #e4dccf;
-      --accent: #0f6e56;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-      color: var(--ink);
-      background: var(--paper);
-      line-height: 1.55;
-    }
-    a { color: var(--accent); }
-    a:hover { text-decoration: none; }
-    header, main, footer { width: min(42rem, calc(100% - 2rem)); margin-inline: auto; }
-    header { padding: 1.25rem 0 0.5rem; }
-    nav { font-family: "Segoe UI", Helvetica, Arial, sans-serif; font-size: 0.92rem; }
-    nav a { margin-right: 1rem; }
-    nav a[aria-current="page"] { color: var(--ink); text-decoration: none; font-weight: 650; }
-    h1 { font-size: 2rem; line-height: 1.2; margin: 0.6rem 0 0.4rem; }
-    h2 { font-size: 1.25rem; margin: 1.6rem 0 0.4rem; }
-    p, li { font-size: 1.05rem; }
-    .lede { font-size: 1.15rem; }
-    .note {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-left: 4px solid var(--accent);
-      padding: 0.8rem 1rem;
-      margin: 1.25rem 0;
-    }
-    pre {
-      background: var(--card);
-      border: 1px solid var(--line);
-      padding: 0.8rem 1rem;
-      overflow-x: auto;
-      font-family: "IBM Plex Mono", "Source Code Pro", ui-monospace, monospace;
-      font-size: 0.92rem;
-      line-height: 1.45;
-    }
-    code { font-family: "IBM Plex Mono", "Source Code Pro", ui-monospace, monospace; font-size: 0.92em; }
-    footer {
-      font-family: "Segoe UI", Helvetica, Arial, sans-serif;
-      font-size: 0.92rem;
-      color: var(--muted);
-      padding: 1.5rem 0 2.5rem;
-    }
-  </style>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header>
@@ -68,13 +16,27 @@
     <p class="lede">The reader creates a Neon project, runs one local setup command, then tries CLI Shadow Review and local Airflow. Nothing on this page is a connection string or a role password.</p>
   </header>
   <main>
+    <h2>Before you start: install the local CLI</h2>
+    <p>Use a Bash terminal on Linux, macOS, or WSL, with Git and Python 3.12 installed. The Airflow section also needs Docker Engine or Docker Desktop running, with Docker Compose v2. Start from the <a href="https://github.com/youzaina001/airflow-dq-agent">project repository</a>:</p>
+    <pre>git clone --branch master https://github.com/youzaina001/airflow-dq-agent.git
+cd airflow-dq-agent
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+dq-agent --help</pre>
+    <p>Run the remaining commands from this directory in the same terminal. A live model is optional: the walkthrough uses <code>LLM_MODE=stub</code>, the default, and needs no model credential.</p>
+
     <h2>1. Create the project you own</h2>
     <p>The reader creates and owns the Neon project on the free plan and adds no payment method, so a quota breach suspends the project instead of charging them. Free-plan compute scales to zero after 5 minutes and cannot be disabled. The reader controls the lifecycle of that project (keep, suspend, or delete it).</p>
     <p>Keep the owner connection string on the reader's machine. Do not send it to this site, and do not add a payment method to keep the project from being suspended.</p>
 
     <h2>2. Run setup</h2>
-    <p><code>setup</code> is a local command. It requires <code>--dsn</code> and the owner connection string. It does not fall back to the process warehouse setting. It does not call a Neon API. Invoke it as:</p>
-    <pre>dq-agent setup --dsn &lt;owner connection string&gt;</pre>
+    <p><code>setup</code> is a local command. It requires <code>--dsn</code> and the owner connection string. It does not fall back to the process warehouse setting. It does not call a Neon API.</p>
+    <p>Paste the owner connection string into this hidden local prompt, then pass the quoted value to setup:</p>
+    <pre>read -r -s -p 'Owner connection string: ' OWNER_DSN
+printf '\n'
+dq-agent setup --dsn "$OWNER_DSN"
+unset OWNER_DSN</pre>
     <p>Success is exit 0, and only after schema install, synthetic warehouse seed, and restricted-login provisioning have all finished. Standard output is exactly these four lines:</p>
     <pre>setup: ready
 read: &lt;read connection string&gt;
@@ -85,21 +47,47 @@ apply: &lt;apply connection string&gt;</pre>
     <pre>command: incomplete: setup or execution error</pre>
 
     <h2>3. Run setup again</h2>
-    <p>A second successful run recreates the synthetic warehouse and replaces the three login passwords. Passwords from the previous run no longer work. The new login lines are again only on the reader's machine.</p>
+    <p>To restart the walkthrough later, repeat the setup commands above. A second successful run recreates the synthetic warehouse and replaces the three login passwords. Passwords from the previous run no longer work. The new login lines are again only on the reader's machine. Use the newest output in the next step; if Airflow is already running, recreate its containers after exporting the replacement values.</p>
 
     <h2>4. What seed still does</h2>
     <p><code>seed</code> still recreates the local warehouse from the process warehouse setting. Invoke it as <code>dq-agent seed</code>. It does not take a connection string, and it does not print login passwords. It is not a substitute for <code>setup</code>.</p>
 
     <h2>5. CLI Shadow Review</h2>
-    <p>Use the printed read and audit logins for the process. Set <code>READ_DSN</code> to the printed read line and <code>AUDIT_DSN</code> to the printed audit line. Set <code>TRACE_POSTGRES=true</code> so the review is written to PostgreSQL. Leave apply off (<code>APPLY_MODE=off</code>). Use the stub Candidate Proposal (<code>LLM_MODE=stub</code>, the default). Load one demo catalog for the process: run <code>dq-agent shadow</code> with no registry argument, so this process does not also load an adopter registry.</p>
+    <p>At each prompt below, paste only the connection-string value after <code>read: </code>, <code>audit: </code>, or <code>apply: </code> from the newest setup output, without that label or added quotes. Exporting makes the values available to both the CLI and Docker Compose. The apply login remains unused while <code>APPLY_MODE=off</code>.</p>
+    <pre>read -r -s -p 'Printed read value: ' READ_DSN
+printf '\n'
+read -r -s -p 'Printed audit value: ' AUDIT_DSN
+printf '\n'
+read -r -s -p 'Printed apply value: ' APPLY_DSN
+printf '\n'
+export READ_DSN AUDIT_DSN APPLY_DSN
+export WAREHOUSE_DSN="$READ_DSN"
+export TRACE_POSTGRES=true LLM_MODE=stub APPLY_MODE=off
+unset REGISTRY_PATH
+dq-agent shadow</pre>
+    <p><code>TRACE_POSTGRES=true</code> writes the review to PostgreSQL. Running <code>dq-agent shadow</code> with no registry argument loads the demo catalog for this process. In a fresh clone, leave <code>REGISTRY_PATH</code> unset; if reusing a checkout, remove any adopter registry setting from your local configuration before following this synthetic demo. The known seeded quality defects produce exit 1 and a review; exit 2 means setup or check execution is incomplete.</p>
     <p>That review records PostgreSQL Audit Lineage through the audit login. It is an evaluated, sample-free Remediation Plan review. Quality Evidence from the failed checks is what a Remediation Plan may use. Check Policy remains the reviewed law for what may be compiled. The review does not take a Human Decision and does not create an Apply Admission.</p>
     <p>A JSONL-only trace is a local demonstration, not a completed PostgreSQL Shadow Review. Leaving PostgreSQL tracing off (<code>TRACE_POSTGRES=false</code>) is that JSONL-only case.</p>
 
     <h2>6. Local Airflow for the synthetic daily demo</h2>
-    <p>Local Airflow runs the synthetic daily demo in <code>dags/dq_daily.py</code>. The interface, scheduler, and metadata database stay on the reader's machine. Point the warehouse at the reader's Neon project by setting <code>READ_DSN</code> to the printed read line. If <code>READ_DSN</code> is unset, that demo uses <code>WAREHOUSE_DSN</code>, so set that to the same printed read line instead. Do not leave either setting on a different database. This release includes no hosted Airflow service and no custom domain.</p>
+    <p>The repository's <code>docker-compose.yaml</code> runs the synthetic daily demo in <code>dags/dq_daily.py</code>. Keep the exported settings from step 5 in this terminal. Compose explicitly passes <code>READ_DSN</code>, <code>AUDIT_DSN</code>, <code>APPLY_DSN</code>, <code>TRACE_POSTGRES</code>, <code>LLM_MODE</code>, and <code>APPLY_MODE</code> into the Airflow services. Do not merely set unexported shell variables or edit a host-only configuration file: the scheduler and DAG processor must receive the printed Neon logins.</p>
+    <p>Build the image, initialize the local metadata database and UI account, then start the interface, scheduler, DAG processor, and triggerer:</p>
+    <pre>export AIRFLOW_UID="$(id -u)"
+mkdir -p logs plugins config dags traces
+docker compose build
+docker compose run --rm airflow-init
+docker compose up -d airflow-apiserver airflow-scheduler airflow-dag-processor airflow-triggerer
+docker compose ps</pre>
+    <p>Continue after initialization exits successfully and the services are running. Airflow's metadata stays in the local <code>postgres</code> service and <code>airflow_pg</code> volume. Compose also starts its bundled local warehouse dependency, but <code>dq_daily</code> reads the exported <code>READ_DSN</code> and writes Audit Lineage through <code>AUDIT_DSN</code> in your Neon project. Leave the metadata connection setting unchanged. Setup has already seeded Neon; do not run <code>make seed</code> for this journey.</p>
+    <ol>
+      <li>Open <a href="http://localhost:8080">the local Airflow interface</a>. Sign in with the local demo username and password declared as <code>_AIRFLOW_WWW_USER_USERNAME</code> and <code>_AIRFLOW_WWW_USER_PASSWORD</code> in <code>docker-compose.yaml</code>.</li>
+      <li>Find <code>dq_daily</code> in the DAG list. It starts paused. Unpause it, then use <strong>Trigger DAG</strong> to start a run.</li>
+      <li>Open the run's task graph and logs. The suite, proposal, candidate audit, and plan review tasks run against the synthetic warehouse. With <code>APPLY_MODE=off</code>, <code>require_approval</code> and the downstream Human Decision and apply tasks are skipped; that is expected.</li>
+    </ol>
+    <p>If the UI or DAG is not ready, inspect <code>docker compose logs airflow-apiserver airflow-scheduler airflow-dag-processor</code>. After replacing exported logins, run the startup command again with <code>--force-recreate</code> so running services receive them. When finished, <code>docker compose stop</code> stops the local services while keeping their data. This release includes no hosted Airflow service and no custom domain.</p>
 
     <h2>7. Human Decision and apply</h2>
-    <p>Human Decision and apply stay on the existing external-invoice example, <code>examples/dq_external_invoice.py</code>. Do not turn the synthetic daily demo into that journey by swapping its catalog. <code>setup</code> does not prepare that example: it does not seed the external-invoice table and it does not load that catalog.</p>
+    <p>Human Decision and apply stay on the existing <a href="https://github.com/youzaina001/airflow-dq-agent/blob/master/examples/dq_external_invoice.py">external-invoice example</a>, <code>examples/dq_external_invoice.py</code>; its setup is documented in the <a href="https://github.com/youzaina001/airflow-dq-agent/blob/master/README.md">repository README</a>. Do not turn the synthetic daily demo into that journey by swapping its catalog. <code>setup</code> does not prepare that example: it does not seed the external-invoice table and it does not load that catalog.</p>
     <p>Apply in this release is Quarantine only. Quarantine is a copy of the authorized Remediation Target Set, not a repair of source rows. An Apply Admission is the durable authorization to execute one evaluated Remediation Plan after its whole-plan Human Decision. Check Policy remains the reviewed law for what may be compiled.</p>
 
     <div class="note">
