@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
@@ -76,6 +77,7 @@ def _load_example_dag(
     audit_dsn: str,
     apply_dsn: str,
 ) -> tuple[types.ModuleType, dict[str, Callable[..., Any]]]:
+    use_settings_without_dotenv(monkeypatch)
     monkeypatch.setenv("WAREHOUSE_DSN", warehouse_dsn)
     monkeypatch.setenv("READ_DSN", read_dsn)
     monkeypatch.setenv("AUDIT_DSN", audit_dsn)

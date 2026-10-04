@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
@@ -77,6 +78,7 @@ def load_dq_daily(
     module_name: str,
 ) -> tuple[types.ModuleType, dict[str, Callable[..., Any]], set[str], frozenset[tuple[str, str]]]:
     """Parse dags/dq_daily.py with stubbed Airflow and record task ids and edges."""
+    use_settings_without_dotenv(monkeypatch)
     monkeypatch.setenv("WAREHOUSE_DSN", "postgresql+psycopg://dq:dq@localhost:1/unused-warehouse")
     monkeypatch.delenv("READ_DSN", raising=False)
     monkeypatch.delenv("AUDIT_DSN", raising=False)
