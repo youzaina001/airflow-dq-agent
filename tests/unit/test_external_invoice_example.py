@@ -12,6 +12,7 @@ from typing import Any
 
 import polars as pl
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.contracts.models import (
     Dimension,
@@ -155,7 +156,14 @@ def _load_example_dag(
     apply_mode: str = "hitl",
     llm_mode: str = "stub",
     module_name: str = "dq_external_invoice_under_test",
-) -> tuple[types.ModuleType, dict[str, Callable[..., Any]], list[dict[str, Any]]]:
+) -> tuple[
+    types.ModuleType,
+    dict[str, Callable[..., Any]],
+    list[dict[str, Any]],
+    frozenset[tuple[str, str]],
+]:
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("REGISTRY_PATH", raising=False)
     monkeypatch.setenv("WAREHOUSE_DSN", "postgresql+psycopg://dq:dq@localhost:5433/warehouse")
     monkeypatch.setenv(
         "READ_DSN", "postgresql+psycopg://dq_read_login:read@localhost:5433/warehouse"
@@ -180,15 +188,28 @@ def _load_example_dag(
     exceptions_module.AirflowSkipException = AirflowSkipException
     sdk_module = types.ModuleType("airflow.sdk")
     tasks: dict[str, Callable[..., Any]] = {}
+    edges: set[tuple[str, str]] = set()
+
+    def _task_id(node: object) -> str | None:
+        task_id = getattr(node, "task_id", None)
+        return task_id if isinstance(task_id, str) else None
 
     class _XComRef:
         def __init__(self, name: str) -> None:
+            self.task_id = name
             self.__name__ = name
 
-        def __call__(self, *_args: Any, **_kwargs: Any) -> _XComRef:
+        def __call__(self, *args: Any, **kwargs: Any) -> _XComRef:
+            for value in (*args, *kwargs.values()):
+                upstream = _task_id(value)
+                if upstream is not None:
+                    edges.add((upstream, self.task_id))
             return self
 
         def __rshift__(self, other: object) -> object:
+            downstream = _task_id(other)
+            if downstream is not None:
+                edges.add((self.task_id, downstream))
             return other
 
     def _stub_dag(
@@ -217,10 +238,13 @@ def _load_example_dag(
     operator_kwargs: list[dict[str, Any]] = []
 
     class _FakeApproval:
-        output = "approval-xcom"
-
         def __init__(self, **kwargs: Any) -> None:
             operator_kwargs.append(kwargs)
+            task_id = kwargs.get("task_id")
+            if not isinstance(task_id, str):
+                raise AssertionError("AuditedApprovalOperator must be given task_id")
+            self.task_id = task_id
+            self.output = _XComRef(task_id)
 
         def __rshift__(self, other: object) -> object:
             return other
@@ -234,7 +258,7 @@ def _load_example_dag(
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module, tasks, operator_kwargs
+    return module, tasks, operator_kwargs, frozenset(edges)
 
 
 def test_example_dag_registers_external_invoice_not_demo(
@@ -244,7 +268,7 @@ def test_example_dag_registers_external_invoice_not_demo(
     assert "register_external_invoice()" in source
     assert "from airflow_dq_agent.demo import register_demo" not in source
     assert "LLM_MODE" not in source or "stub" in source
-    module, tasks, operator_kwargs = _load_example_dag(monkeypatch)
+    module, tasks, operator_kwargs, _ = _load_example_dag(monkeypatch)
     assert module.settings.llm_mode == "stub"
     assert module.settings.apply_mode == "hitl"
     assert module.settings.openai_api_key is None
@@ -258,7 +282,7 @@ def test_example_dag_registers_external_invoice_not_demo(
 def test_example_dag_binds_restricted_read_audit_and_apply_dsns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _module, tasks, operator_kwargs = _load_example_dag(monkeypatch)
+    _module, tasks, operator_kwargs, _ = _load_example_dag(monkeypatch)
     suite_src = inspect.getsource(tasks["run_suite_task"])
     admit_src = inspect.getsource(tasks["admit_apply_task"])
     apply_src = inspect.getsource(tasks["apply_after_admission_task"])
@@ -290,6 +314,26 @@ _EXAMPLE_TASK_IDS = frozenset(
     }
 )
 
+# Hand-written from call arguments and `approval_gate >> approval`
+# in examples/dq_external_invoice.py. Not derived from the stub.
+_EXPECTED_DIRECTED_EDGES = frozenset(
+    {
+        ("run_suite_task", "propose_task"),
+        ("run_suite_task", "audit_candidate_task"),
+        ("propose_task", "audit_candidate_task"),
+        ("run_suite_task", "prepare_plan_task"),
+        ("audit_candidate_task", "prepare_plan_task"),
+        ("prepare_plan_task", "require_approval"),
+        ("require_approval", "approve_remediation_plan"),
+        ("run_suite_task", "admit_apply_task"),
+        ("prepare_plan_task", "admit_apply_task"),
+        ("approve_remediation_plan", "admit_apply_task"),
+        ("run_suite_task", "apply_after_admission_task"),
+        ("prepare_plan_task", "apply_after_admission_task"),
+        ("admit_apply_task", "apply_after_admission_task"),
+    }
+)
+
 
 def _example_task_ids(
     tasks: dict[str, Callable[..., Any]], operator_kwargs: list[dict[str, Any]]
@@ -302,13 +346,27 @@ def _example_task_ids(
 def test_example_dag_task_ids_stay_stable_across_modes(
     monkeypatch: pytest.MonkeyPatch, llm_mode: str, apply_mode: str
 ) -> None:
-    _module, tasks, operator_kwargs = _load_example_dag(
+    _module, tasks, operator_kwargs, _ = _load_example_dag(
         monkeypatch,
         apply_mode=apply_mode,
         llm_mode=llm_mode,
         module_name=f"invoice_topology_{llm_mode}_{apply_mode}",
     )
     assert _example_task_ids(tasks, operator_kwargs) == _EXAMPLE_TASK_IDS
+
+
+@pytest.mark.parametrize("llm_mode", ("stub", "replay", "live"))
+@pytest.mark.parametrize("apply_mode", ("off", "hitl"))
+def test_example_dag_directed_edges_equal_expected_set_for_every_mode_pair(
+    monkeypatch: pytest.MonkeyPatch, llm_mode: str, apply_mode: str
+) -> None:
+    _module, _tasks, _operator_kwargs, edges = _load_example_dag(
+        monkeypatch,
+        apply_mode=apply_mode,
+        llm_mode=llm_mode,
+        module_name=f"invoice_edges_{llm_mode}_{apply_mode}",
+    )
+    assert edges == _EXPECTED_DIRECTED_EDGES
 
 
 def test_example_apply_skips_before_mutation_when_apply_mode_is_off(
@@ -328,7 +386,7 @@ def test_example_apply_skips_before_mutation_when_apply_mode_is_off(
         RemediationPlan,
     )
 
-    module, tasks, _operator_kwargs = _load_example_dag(
+    module, tasks, _operator_kwargs, _ = _load_example_dag(
         monkeypatch, apply_mode="off", module_name="invoice_skip_off"
     )
     plan = RemediationPlan(
@@ -414,7 +472,7 @@ def test_example_apply_skips_before_mutation_when_apply_mode_is_off(
 def test_example_dag_skips_apply_on_reject_and_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _module, tasks, _kwargs = _load_example_dag(monkeypatch)
+    _module, tasks, _kwargs, _ = _load_example_dag(monkeypatch)
     admit_src = inspect.getsource(tasks["admit_apply_task"])
     assert 'if parsed_decision.decision in {"Reject", "Timeout"}:' in admit_src
     assert "AirflowSkipException" in admit_src
@@ -506,7 +564,7 @@ def test_dag_preparation_preserves_lineage_privacy_and_approval_gate(
     from airflow_dq_agent.quality import sample_free_report
 
     monkeypatch.setattr(sys.modules[__name__], "EXAMPLE_DAG", dag_path)
-    module, tasks, operator_kwargs = _load_example_dag(monkeypatch)
+    module, tasks, operator_kwargs, _ = _load_example_dag(monkeypatch)
     raw = seeded_failure_report()
     report = raw.model_copy(
         update={"audit_event_id": "existing-root", "fingerprint": report_payload_fingerprint(raw)}

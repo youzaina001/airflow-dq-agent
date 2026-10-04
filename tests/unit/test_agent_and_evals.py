@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.cli import _drop_table_proposal, _spurious_green_proposal
@@ -16,6 +17,9 @@ from airflow_dq_agent.evals import evaluate_proposal
 
 
 def test_stub_proposal_is_allow_list_grounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.setenv("LLM_MODE", "stub")
     report = seeded_failure_report()
     agent_run = run_proposal_agent(report)

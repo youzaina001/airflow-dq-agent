@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.engine import make_url
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.apply.executor import apply_plan
 from airflow_dq_agent.contracts.fingerprints import (
@@ -46,6 +47,23 @@ from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.traces import InMemoryAuditRepository
 from airflow_dq_agent.traces.lineage import decision_event, quality_report_event, review_event
+
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+    for name in (
+        "APPLY_MODE",
+        "TRACE_POSTGRES",
+        "WAREHOUSE_DSN",
+        "READ_DSN",
+        "AUDIT_DSN",
+        "APPLY_DSN",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 

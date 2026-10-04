@@ -90,6 +90,7 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-q --strict-markers"
 markers = [
   "integration: hits Postgres (testcontainers or TEST_WAREHOUSE_DSN)",

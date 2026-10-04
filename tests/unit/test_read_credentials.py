@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.agent.runner import (
     _get_observed_schema_tool,
@@ -22,6 +23,12 @@ from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.quality.suite import run_quality_suite
 from airflow_dq_agent.warehouse.db import make_engine
+
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+
 
 DAG_PATH = Path(__file__).resolve().parents[2] / "dags" / "dq_daily.py"
 

@@ -1,10 +1,18 @@
 from pathlib import Path
 
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.cli import build_parser, main
 from airflow_dq_agent.contracts.models import CheckStatus, QualitySuiteReport
 from airflow_dq_agent.demo import green_report, seeded_failure_report
+
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("APPLY_MODE", raising=False)
+    monkeypatch.delenv("TRACE_POSTGRES", raising=False)
 
 
 def _error_report() -> QualitySuiteReport:

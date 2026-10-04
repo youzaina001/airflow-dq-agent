@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import text
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.adoption import apply_governance_schema, provision_restricted_logins
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
@@ -93,6 +94,7 @@ def _prepare(admin_dsn: str) -> tuple[str, str]:
 def _stub_and_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Any, dict[str, Callable[..., Any]]]:
+    use_settings_without_dotenv(monkeypatch)
     exceptions_module = types.ModuleType("airflow.exceptions")
 
     class AirflowSkipException(Exception):

@@ -9,6 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import text
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.adoption import (
     RestrictedCredentials,
@@ -38,6 +39,15 @@ from airflow_dq_agent.traces import (
 )
 from airflow_dq_agent.traces.lineage import evaluation_event, plan_event, review_event
 from airflow_dq_agent.warehouse.db import make_engine
+
+
+@pytest.fixture(autouse=True)
+def _ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repo .env or an inherited LLM_MODE must not select a live proposer."""
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("LLM_MODE", "stub")
 
 
 @pytest.fixture(autouse=True)

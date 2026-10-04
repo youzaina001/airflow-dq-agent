@@ -1,6 +1,11 @@
 import json
 
 import pytest
+from tests.settings_isolation import (
+    isolated_settings,
+    use_isolated_settings,
+    use_settings_without_dotenv,
+)
 
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.cli import command_demo
@@ -10,12 +15,21 @@ from airflow_dq_agent.traces import __all__ as traces_exports
 from airflow_dq_agent.traces import candidate_proposal_event, quality_report_event, trace_agent_run
 from airflow_dq_agent.traces import writer as traces_writer
 
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+
+
 # Seeded dim_customer.email.validity sample. A live proposer can echo it into
 # Candidate Proposal identifiers; durable audit must not persist it.
 SAMPLED_VALUE = "c101.invalid"
 
 
-def test_trace_appends_minimized_report_and_candidate_events(tmp_path) -> None:
+def test_trace_appends_minimized_report_and_candidate_events(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_isolated_settings(monkeypatch)
     report = seeded_failure_report()
     agent_run = run_proposal_agent(report)
     trace = trace_agent_run(
@@ -38,6 +52,7 @@ def test_public_traces_package_does_not_record_a_human_decision() -> None:
 def test_cli_demo_trace_does_not_persist_sampled_proposal_identifiers(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("airflow_dq_agent.agent.runner.get_settings", isolated_settings)
     report = seeded_failure_report()
     agent_run = run_proposal_agent(report)
     poisoned = agent_run.proposal.model_copy(
@@ -63,7 +78,10 @@ def test_cli_demo_trace_does_not_persist_sampled_proposal_identifiers(
     assert candidate["candidate_fingerprint"].startswith("sha256:")
 
 
-def test_candidate_proposal_event_ignores_proposer_supplied_fingerprint() -> None:
+def test_candidate_proposal_event_ignores_proposer_supplied_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    use_isolated_settings(monkeypatch)
     report = seeded_failure_report()
     proposal = run_proposal_agent(report).proposal
     predecessor = quality_report_event(report)
