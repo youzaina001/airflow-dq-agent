@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.cli import _drop_table_proposal, _spurious_green_proposal
@@ -22,6 +23,9 @@ def _load_case(path: Path) -> dict[str, object]:
 def test_yaml_eval_cases(case_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     case = _load_case(case_path)
     report = green_report() if case["report"] == "green" else seeded_failure_report()
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     kind = case["proposal"]
     if kind == "stub":
         monkeypatch.setenv("LLM_MODE", "stub")

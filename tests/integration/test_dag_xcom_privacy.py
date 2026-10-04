@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.agent import AgentRun, run_proposal_agent
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
@@ -61,6 +62,7 @@ def dag_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[types.ModuleType, dict[str, Callable[..., Any]]]:
     """Load dags/dq_daily.py with stubbed Airflow task registration."""
+    use_settings_without_dotenv(monkeypatch)
     # Loading and directly exercising non-database task bodies must not require
     # Docker. Tests that run the suite supply their own throwaway warehouse DSN.
     monkeypatch.setenv("WAREHOUSE_DSN", "postgresql+psycopg://dq:dq@localhost:1/unused-warehouse")
