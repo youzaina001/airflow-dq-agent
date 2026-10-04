@@ -2,6 +2,7 @@
 # The base is published by Apache; these replacements are reviewed in-repo.
 # Official no-providers still pin SQLAlchemy 1.4.54; the warehouse DSN is
 # postgresql+psycopg, which needs SQLAlchemy 2.
+# Airflow core excludes SQLAlchemy 2.1.0 (`>=2.0.50,!=2.1.0`).
 SQLAlchemy==2.0.54
 # pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0; keep the OTel
 # 1.28 set together (Airflow 3.1.5 allows >=1.27.0).
@@ -16,7 +17,7 @@ opentelemetry-semantic-conventions==0.65b0
 # The image includes Airflow's Prometheus exporter. It must match the OTel 1.28 SDK.
 opentelemetry-exporter-prometheus==0.65b0
 # FAB 3.8 supports SQLAlchemy 2 and requires the current PyJWT release.
-PyJWT==2.14.0
+PyJWT==2.15.0
 # Airflow 3.1.5 pins googleapis-common-protos 1.72.0, which rejects protobuf 7.
-googleapis-common-protos==1.73.1
+googleapis-common-protos==1.75.3
 protobuf==7.36.2
