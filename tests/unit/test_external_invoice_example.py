@@ -260,11 +260,9 @@ def test_example_dag_binds_restricted_read_audit_and_apply_dsns(
 ) -> None:
     _module, tasks, operator_kwargs = _load_example_dag(monkeypatch)
     suite_src = inspect.getsource(tasks["run_suite_task"])
-    compile_src = inspect.getsource(tasks["compile_plan_task"])
     admit_src = inspect.getsource(tasks["admit_apply_task"])
     apply_src = inspect.getsource(tasks["apply_after_admission_task"])
     assert "read_dsn" in suite_src
-    assert "read_dsn" in compile_src
     assert "audit_dsn" in admit_src
     assert "apply_dsn" in apply_src
     assert "dry_run=False" in apply_src
@@ -284,8 +282,7 @@ _EXAMPLE_TASK_IDS = frozenset(
         "run_suite_task",
         "propose_task",
         "audit_candidate_task",
-        "compile_plan_task",
-        "evaluate_plan_task",
+        "prepare_plan_task",
         "require_approval",
         "approve_remediation_plan",
         "admit_apply_task",
@@ -491,3 +488,101 @@ def test_crash_retry_proof_binds_admission_xcom_and_apply_log_identity() -> None
     assert "-ge 1" not in script
     assert "FROM dq.apply_log WHERE admission_id" in script
     assert "body ->> 'apply_result_id'" in script
+
+
+@pytest.mark.parametrize("dag_path", [EXAMPLE_DAG, REPO / "dags" / "dq_daily.py"])
+@pytest.mark.parametrize("outcome", ["passing", "blocked", "candidate_failed", "audit_failed"])
+def test_dag_preparation_preserves_lineage_privacy_and_approval_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    dag_path: Path,
+    outcome: str,
+) -> None:
+    import json
+
+    from airflow_dq_agent.agent import AgentRun, run_proposal_agent
+    from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
+    from airflow_dq_agent.contracts.models import AuditEvent
+    from airflow_dq_agent.demo import seeded_failure_report
+    from airflow_dq_agent.quality import sample_free_report
+
+    monkeypatch.setattr(sys.modules[__name__], "EXAMPLE_DAG", dag_path)
+    module, tasks, operator_kwargs = _load_example_dag(monkeypatch)
+    raw = seeded_failure_report()
+    report = raw.model_copy(
+        update={"audit_event_id": "existing-root", "fingerprint": report_payload_fingerprint(raw)}
+    )
+    echoed = run_proposal_agent(report).proposal.model_copy(
+        update={
+            "proposal_id": "secret-row",
+            "fingerprint": "secret-row",
+            "summary": "secret-row",
+            "root_cause_hypothesis": "secret-row",
+            "do_not_apply_reasons": ["secret-row"],
+        }
+    )
+    monkeypatch.setattr(
+        module,
+        "run_proposal_agent",
+        lambda _: AgentRun(proposal=echoed, prompt="secret-row", tool_calls=[], llm_mode="live"),
+    )
+    events: list[AuditEvent] = []
+
+    def persist(event: AuditEvent) -> None:
+        if outcome == "audit_failed" and event.kind == "approval_review":
+            raise RuntimeError("audit unavailable")
+        events.append(event)
+
+    class Targets:
+        def __init__(self, *, engine: object) -> None:
+            assert engine == module.settings.read_dsn or engine == module.settings.warehouse_dsn
+
+        def resolve(self, **_: object) -> TargetSet:
+            if outcome == "blocked":
+                raise ValueError("secret-row")
+            return TargetSet(count=5, fingerprint="targets:dag")
+
+    monkeypatch.setattr(module, "append_event", persist)
+    monkeypatch.setattr(module, "make_engine", lambda dsn: dsn)
+    monkeypatch.setattr(module, "PostgresTargetSetResolver", Targets)
+    report_payload = sample_free_report(report)
+    proposal = tasks["propose_task"](report_payload)
+    candidate = tasks["audit_candidate_task"](report_payload, proposal)
+    if outcome == "candidate_failed":
+        candidate["candidate_evaluation"]["passed"] = False
+        with pytest.raises(
+            module.AirflowSkipException, match="Candidate Proposal evaluation failed"
+        ):
+            tasks["prepare_plan_task"](report_payload, candidate)
+        assert len(events) == 1
+        return
+    if outcome == "audit_failed":
+        with pytest.raises(RuntimeError, match="audit unavailable"):
+            tasks["prepare_plan_task"](report_payload, candidate)
+        assert [event.kind for event in events] == [
+            "candidate_proposal",
+            "plan_compiled",
+            "evaluation",
+        ]
+        return
+    prepared = tasks["prepare_plan_task"](report_payload, candidate)
+    assert [event.kind for event in events] == [
+        "candidate_proposal",
+        "plan_blocked" if outcome == "blocked" else "plan_compiled",
+        "evaluation",
+        "approval_review",
+    ]
+    assert events[0].predecessor_ids == [report.audit_event_id]
+    assert all(
+        event.predecessor_ids == [events[i - 1].event_id] for i, event in enumerate(events) if i
+    )
+    assert prepared["approval_review"] == events[-1].review_payload
+    assert prepared["plan"]["candidate_fingerprint"] == events[0].candidate_fingerprint
+    body = json.dumps([proposal, candidate, prepared, [e.model_dump(mode="json") for e in events]])
+    assert "secret-row" not in body
+    assert "sample_failures" not in body
+    assert "prepare_plan_task" in operator_kwargs[0]["body"]
+    if outcome == "blocked":
+        with pytest.raises(module.AirflowSkipException, match="No passing executable"):
+            tasks["require_approval"](prepared)
+    else:
+        tasks["require_approval"](prepared)

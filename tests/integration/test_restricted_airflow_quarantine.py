@@ -180,8 +180,7 @@ def _evaluate_example(
     report_payload = tasks["run_suite_task"]()
     proposal_payload = tasks["propose_task"](report_payload)
     candidate_payload = tasks["audit_candidate_task"](report_payload, proposal_payload)
-    compiled_payload = tasks["compile_plan_task"](report_payload, candidate_payload)
-    evaluated_payload = tasks["evaluate_plan_task"](compiled_payload)
+    evaluated_payload = tasks["prepare_plan_task"](report_payload, candidate_payload)
     return module, tasks, report_payload, evaluated_payload
 
 

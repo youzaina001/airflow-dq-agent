@@ -156,14 +156,12 @@ def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
     report_payload = dag_tasks["run_suite_task"]()
     proposal_payload = dag_tasks["propose_task"](report_payload)
     candidate_payload = dag_tasks["audit_candidate_task"](report_payload, proposal_payload)
-    compiled_payload = dag_tasks["compile_plan_task"](report_payload, candidate_payload)
-    evaluated_payload = dag_tasks["evaluate_plan_task"](compiled_payload)
+    evaluated_payload = dag_tasks["prepare_plan_task"](report_payload, candidate_payload)
 
     for payload in (
         report_payload,
         proposal_payload,
         candidate_payload,
-        compiled_payload,
         evaluated_payload,
     ):
         _assert_payload_is_sample_free(payload)
@@ -183,7 +181,7 @@ def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
     assert proposal.candidate_actions
     assert EvalReport.model_validate(candidate_payload["candidate_evaluation"]).passed
 
-    plan = RemediationPlan.model_validate(compiled_payload["plan"])
+    plan = RemediationPlan.model_validate(evaluated_payload["plan"])
     assert plan.items
     executable = tuple(item for item in plan.items if isinstance(item, ExecutablePlanItem))
     assert executable == plan.items
@@ -192,7 +190,6 @@ def test_dag_xcom_payloads_are_sample_free_and_governance_survives(
 
     evaluation = EvalReport.model_validate(evaluated_payload["evaluation"])
     assert evaluation.passed
-    assert evaluated_payload["plan_event_id"] == compiled_payload["plan_event_id"]
 
 
 @pytest.mark.integration
