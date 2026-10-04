@@ -12,9 +12,10 @@ Commands
 Results
 - pytest tests/unit tests/evals exited 0. LLM_MODE=stub and APPLY_MODE=off. No live LLM key was used.
 - The checker exited 0.
-- covered_branches/num_branches 451/580
-- ratio 0.77758621
-- 451/580 is at least 75%. The metric is sum(covered_branches) / sum(num_branches) from the coverage JSON with branch collection on. It is not coverage.py percent_covered.
+- covered_branches/num_branches 453/582
+- ratio 0.77835052
+- 453/582 is at least 75%. The metric is sum(covered_branches) / sum(num_branches) from the coverage JSON with branch collection on. It is not coverage.py percent_covered.
+- Re-measured after the follow-up that returns an already committed result when the in-transaction clock expires. That retry does not emit apply_failed and does not mutate again.
 - The JSON report was coverage.json. CI uploads that file from the branch-coverage job as the coverage-json artifact.
 
 Coverage scope

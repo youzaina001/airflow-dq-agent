@@ -57,6 +57,11 @@ def _is_serialization_failure(exc: BaseException) -> bool:
     return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40001"
 
 
+def _is_expired_admission(exc: BaseException) -> bool:
+    """An in-transaction expiry must still recover a result that already committed."""
+    return isinstance(exc, PermissionError) and "apply admission has expired" in str(exc)
+
+
 class _AuditEventSink(Protocol):
     def append(self, event: AuditEvent) -> None: ...
 
@@ -560,17 +565,22 @@ def apply_plan(
             "committed result could not be recovered"
         ) from exc
     except Exception as exc:
-        if _is_serialization_failure(exc):
-            assert admission is not None
+        if (
+            not dry_run
+            and admission is not None
+            and (_is_serialization_failure(exc) or _is_expired_admission(exc))
+        ):
             recovered = _recover_committed_result(
                 database, plan=plan, evaluation=evaluation, admission=admission
             )
             if recovered is not None:
                 return recovered
-            raise PermissionError(
-                "Refusing apply: apply could not commit under concurrent access and "
-                "its committed result could not be recovered"
-            ) from exc
+            if _is_serialization_failure(exc):
+                raise PermissionError(
+                    "Refusing apply: apply could not commit under concurrent access and "
+                    "its committed result could not be recovered"
+                ) from exc
+            raise
         _emit_apply_failed(
             plan,
             evaluation,
