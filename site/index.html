@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Governed data quality — a local walkthrough</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="index.html" aria-current="page">Landing</a>
+      <a href="walkthrough.html">Walkthrough</a>
+    </nav>
+    <h1>A local walkthrough against a database you create</h1>
+    <p class="lede">This site teaches a reader to run the governed data-quality workflow on their own machine, against a Neon project they create and own.</p>
+  </header>
+  <main>
+    <p>The reader creates and owns the Neon project on the free plan and adds no payment method, so a quota breach suspends the project instead of charging them. Free-plan compute scales to zero after 5 minutes and cannot be disabled. The reader controls the lifecycle of that project (keep, suspend, or delete it). The connection string and the generated role passwords stay on the reader's machine.</p>
+    <p>There is no hosted Airflow service and no custom domain in this release. Airflow's interface, scheduler, and metadata database stay on the reader's machine. The warehouse is the reader's Neon project. The steps are in the <a href="walkthrough.html">walkthrough</a>.</p>
+    <p>A live model is optional. The walkthrough uses the default stub Candidate Proposal and needs no model credential. Start with the installation steps in the walkthrough, or browse the <a href="https://github.com/youzaina001/airflow-dq-agent">project repository</a>.</p>
+    <h2>Words for the governed path</h2>
+    <p>Quality Evidence is a reference to a specific failed check in one quality suite report. A Candidate Proposal may request remediations, but it has no authority until compilation produces a Remediation Plan. Check Policy remains the reviewed law for what may be compiled.</p>
+    <p>A CLI Shadow Review records an evaluated, sample-free Remediation Plan in PostgreSQL Audit Lineage. It does not take a Human Decision and it does not create an Apply Admission. Apply in this release is Quarantine only: a copy of the authorized Remediation Target Set, not a repair of source rows.</p>
+    <div class="note">
+      <p>This release does not claim a Neon project or the Pages site is already deployed. Creating the Cloudflare Pages project and attaching it to <code>master</code> is a dashboard action and has not been done. These pages are the static source that Cloudflare Pages would publish from the existing <code>master</code> branch. The branch is not renamed.</p>
+    </div>
+  </main>
+  <footer>
+    <p>Static HTML. No build step. No Pages project id and no account id.</p>
+  </footer>
+</body>
+</html>
