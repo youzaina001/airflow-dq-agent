@@ -139,14 +139,14 @@ jobs:
 
       - name: Run OpenCodeReview
         if: ${{ steps.pr-context.outputs.skip != 'true' }}
-        # Pinned to v1.12.7 (commit 85cecfe) instead of the moving @main ref.
+        # Pinned to v1.12.11 (commit a758d9c) instead of the moving @main ref.
         # ocr_version pins the npm CLI the action installs (default is latest).
         uses: alibaba/open-code-review@a758d9cbfb689937c7857ad64b2dd66adb58c0c2
         env:
           # Disable self-update before installation's first `ocr version` call.
           OCR_NO_UPDATE: '1'
         with:
-          ocr_version: '1.12.7'
+          ocr_version: '1.12.11'
           llm_url: https://openrouter.ai/api/v1
           llm_auth_token: ${{ secrets.OPENROUTER_API_KEY }}
           llm_model: ${{ steps.pr-context.outputs.model }}
