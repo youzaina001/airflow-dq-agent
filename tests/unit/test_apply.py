@@ -949,6 +949,77 @@ def test_expired_admission_with_committed_result_returns_it_read_only(
     assert "apply_failed" not in kinds
 
 
+def test_expiry_after_target_resolution_refuses_without_writing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    assert now < admission.expires_at
+    engine = _CommitTrackingEngine()
+    expired_at = admission.expires_at + timedelta(seconds=1)
+    resolved = {"done": False}
+    readings: list[tuple[bool, datetime]] = []
+
+    def clock() -> datetime:
+        reading = expired_at if resolved["done"] else now
+        readings.append((resolved["done"], reading))
+        return reading
+
+    class _ExpireAfterResolve:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def resolve_item(self, _: object, item: object) -> TargetSet:
+            del item
+            raise AssertionError("mutation apply must lock, not resolve")
+
+        def lock_and_resolve(self, _: object, item: object) -> TargetSet:
+            target = item.target_set  # type: ignore[union-attr]
+            resolved["done"] = True
+            return target
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _ExpireAfterResolve
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    try:
+        outcome: object = apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            clock=clock,
+            run_id="unit-expiry-during-resolve",
+            audit_sink=_NoopAuditSink(),
+        )
+    except PermissionError as exc:
+        outcome = exc
+
+    assert isinstance(outcome, PermissionError), outcome
+    assert "apply admission has expired" in str(outcome)
+    assert resolved["done"] is True
+    assert readings
+    assert all(reading < admission.expires_at for after, reading in readings if not after)
+    assert any(reading > admission.expires_at for after, reading in readings if after)
+    assert engine.transaction.rolled_back
+    assert engine.transaction.committed is False
+    statements = [sql for sql, _params in engine.transaction.connection.calls]
+    assert [sql for sql in statements if "record_apply_result" in sql] == []
+    assert [
+        sql for sql in statements if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+    ] == []
+    kinds = [getattr(event, "kind", None) for event in lineage]
+    assert "apply_succeeded" not in kinds
+
+
 def test_pre_commit_apply_failure_still_emits_apply_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
