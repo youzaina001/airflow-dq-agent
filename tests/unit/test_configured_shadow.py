@@ -6,6 +6,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.cli import build_parser, main
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
@@ -15,6 +16,12 @@ from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.quality import run_suite_on_frames
 from airflow_dq_agent.quality.registry import CHECK_SPECS
 from airflow_dq_agent.warehouse.db import READ_CONNECTION_FAILED
+
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+
 
 INVOICE_REGISTRY = """
 tables:

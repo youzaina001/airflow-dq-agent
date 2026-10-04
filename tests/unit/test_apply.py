@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, OperationalError
+from tests.settings_isolation import use_settings_without_dotenv
 
 import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
@@ -34,6 +35,13 @@ from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.traces import InMemoryAuditRepository
 from airflow_dq_agent.traces.lineage import apply_result_event, decision_event, review_event
+
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("APPLY_MODE", raising=False)
+    monkeypatch.delenv("TRACE_POSTGRES", raising=False)
 
 
 class _RecordingConnection:

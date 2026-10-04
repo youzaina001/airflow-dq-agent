@@ -12,12 +12,19 @@ from typing import Any
 import polars as pl
 import pytest
 import yaml
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.contracts.fingerprints import report_payload_fingerprint
 from airflow_dq_agent.contracts.models import AuditEvent, QualitySuiteReport, TargetSet
 from airflow_dq_agent.contracts.tables import TABLE_CONTRACTS
 from airflow_dq_agent.quality import run_suite_on_frames
 from airflow_dq_agent.quality.registry import CHECK_SPECS
+
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+
 
 REPO = Path(__file__).resolve().parents[2]
 DAG_PATH = REPO / "dags" / "dq_shadow.py"

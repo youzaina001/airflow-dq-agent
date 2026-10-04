@@ -12,6 +12,7 @@ from typing import Any
 
 import polars as pl
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.contracts.models import (
     Dimension,
@@ -156,6 +157,8 @@ def _load_example_dag(
     llm_mode: str = "stub",
     module_name: str = "dq_external_invoice_under_test",
 ) -> tuple[types.ModuleType, dict[str, Callable[..., Any]], list[dict[str, Any]]]:
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("REGISTRY_PATH", raising=False)
     monkeypatch.setenv("WAREHOUSE_DSN", "postgresql+psycopg://dq:dq@localhost:5433/warehouse")
     monkeypatch.setenv(
         "READ_DSN", "postgresql+psycopg://dq_read_login:read@localhost:5433/warehouse"
