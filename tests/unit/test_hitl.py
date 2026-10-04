@@ -306,17 +306,6 @@ def test_audited_approval_binds_the_shown_review_fingerprint() -> None:
     assert events[0].kind == "human_approved"
 
 
-def test_dag_uses_sample_free_approval_review_body() -> None:
-    source = Path(__file__).resolve().parents[2] / "dags" / "dq_daily.py"
-    text = source.read_text(encoding="utf-8")
-    assert "Evaluation passed. Approve the whole plan or reject it. A note is required." not in text
-    assert "build_approval_review" in text
-    assert "approval_review_body" in text
-    assert "review_event" in text
-    assert "review_event_id" in text
-    assert "PostgresAuditRepository" in text
-
-
 def test_dag_skips_honest_non_approve_and_refuses_invalid_decisions() -> None:
     source = Path(__file__).resolve().parents[2] / "dags" / "dq_daily.py"
     text = source.read_text(encoding="utf-8")

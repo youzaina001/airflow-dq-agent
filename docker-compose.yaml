@@ -34,6 +34,7 @@ x-airflow-common: &airflow-common
     OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
     REPLAY_TRACE_PATH: ${REPLAY_TRACE_PATH:-evals/fixtures/traces/replay-proposal.json}
     TRACE_POSTGRES: ${TRACE_POSTGRES:-false}
+    REGISTRY_PATH:
     HITL_APPROVER_IDS: ${HITL_APPROVER_IDS:-airflow}
     DQ_HITL_TIMEOUT_SECONDS: ${DQ_HITL_TIMEOUT_SECONDS:-86400}
     TRACES_DIR: /opt/airflow/traces
