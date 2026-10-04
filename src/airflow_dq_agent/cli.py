@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 
 from pydantic import BaseModel
@@ -278,11 +279,16 @@ def command_setup(dsn: str | None) -> int:
         print("command: incomplete: setup or execution error")
         return 2
     dsn = _psycopg_dsn(dsn)
+    phase = "schema install"
     try:
         apply_governance_schema(dsn)
+        phase = "synthetic seed"
         seed_warehouse(dsn)
+        phase = "restricted-login provisioning"
         credentials = provision_restricted_logins(dsn)
-    except Exception:
+    except Exception as exc:
+        # Exception messages and tracebacks can contain DSNs, SQL, or row values.
+        print(f"setup: {phase} failed ({type(exc).__name__})", file=sys.stderr)
         print("command: incomplete: setup or execution error")
         return 2
     print("setup: ready")

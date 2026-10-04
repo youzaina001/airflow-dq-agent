@@ -59,6 +59,31 @@ def test_setup_refused_dsn_exits_2_without_ready_summary(
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize(
+    ("owner_dsn", "exception_class"),
+    [
+        ("malformed-SENTINEL-OWNER-SECRET", "ArgumentError"),
+        (
+            "postgresql+psycopg://owner:SENTINEL-OWNER-SECRET@127.0.0.1:1/warehouse",
+            "OperationalError",
+        ),
+    ],
+)
+def test_setup_failure_reports_only_phase_and_exception_class(
+    owner_dsn: str,
+    exception_class: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["setup", "--dsn", owner_dsn]) == 2
+
+    output = capsys.readouterr()
+    assert output.out == f"{_INCOMPLETE}\n"
+    assert output.err == f"setup: schema install failed ({exception_class})\n"
+    assert "SENTINEL-OWNER-SECRET" not in output.out + output.err
+    assert owner_dsn not in output.out + output.err
+
+
+@pytest.mark.integration
 def test_setup_prints_distinct_logins_and_read_login_sees_known_defects(
     warehouse_dsn: str,
     capsys: pytest.CaptureFixture[str],

@@ -84,7 +84,9 @@ docker compose ps</pre>
       <li>Find <code>dq_daily</code> in the DAG list. It starts paused. Unpause it, then use <strong>Trigger DAG</strong> to start a run.</li>
       <li>Open the run's task graph and logs. The suite, proposal, candidate audit, and plan review tasks run against the synthetic warehouse. With <code>APPLY_MODE=off</code>, <code>require_approval</code> and the downstream Human Decision and apply tasks are skipped; that is expected.</li>
     </ol>
-    <p>If the UI or DAG is not ready, inspect <code>docker compose logs airflow-apiserver airflow-scheduler airflow-dag-processor</code>. After replacing exported logins, run the startup command again with <code>--force-recreate</code> so running services receive them. When finished, <code>docker compose stop</code> stops the local services while keeping their data. This release includes no hosted Airflow service and no custom domain.</p>
+    <p>If the UI or DAG is not ready, inspect <code>docker compose logs airflow-apiserver airflow-scheduler airflow-dag-processor</code>. After replacing exported logins, recreate the running services so they receive them:</p>
+    <pre>docker compose up -d --force-recreate airflow-apiserver airflow-scheduler airflow-dag-processor airflow-triggerer</pre>
+    <p>When finished, <code>docker compose stop</code> stops the local services while keeping their data. This release includes no hosted Airflow service and no custom domain.</p>
 
     <h2>7. Human Decision and apply</h2>
     <p>Human Decision and apply stay on the existing <a href="https://github.com/youzaina001/airflow-dq-agent/blob/master/examples/dq_external_invoice.py">external-invoice example</a>, <code>examples/dq_external_invoice.py</code>; its setup is documented in the <a href="https://github.com/youzaina001/airflow-dq-agent/blob/master/README.md">repository README</a>. Do not turn the synthetic daily demo into that journey by swapping its catalog. <code>setup</code> does not prepare that example: it does not seed the external-invoice table and it does not load that catalog.</p>
