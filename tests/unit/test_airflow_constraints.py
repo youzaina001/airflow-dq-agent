@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+OVERLAY = Path(__file__).resolve().parents[2] / "constraints-airflow-overlay.txt"
+
 
 def _merge_module() -> object:
     path = Path(__file__).resolve().parents[2] / "scripts/merge_airflow_constraints.py"
@@ -40,3 +42,15 @@ def test_overlay_normalizes_package_names_and_rejects_duplicate_pins() -> None:
             "",
             ["opentelemetry-api==1.28.0", "opentelemetry_api==1.28.0"],
         )
+
+
+def test_airflow_overlay_sqlalchemy_pin_stays_on_2_0() -> None:
+    pins = [
+        line.strip()
+        for line in OVERLAY.read_text().splitlines()
+        if line.lower().startswith("sqlalchemy==")
+    ]
+    assert len(pins) == 1
+    version = pins[0].split("==", 1)[1]
+    assert version.startswith("2.0.")
+    assert version != "2.1.0"
