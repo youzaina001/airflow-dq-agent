@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text
@@ -95,6 +96,18 @@ _ROW_PARITY: tuple[tuple[str, str, set[int], set[int]], ...] = (
     ),
 )
 
+# Seeded uniqueness business keys. These literals are the warehouse defects,
+# not a Polars group or a copy of the sample SQL GROUP BY.
+_SEEDED_UNIQUENESS_KEYS: dict[str, dict[str, object]] = {
+    "fact_orders.order_nk.uniqueness": {
+        "customer_sk": 7,
+        "order_ts": datetime(2025, 6, 3, 12, tzinfo=UTC),
+    },
+    "dim_patient.subject_id.uniqueness": {
+        "subject_id": "SUBJ-DUPE",
+    },
+}
+
 
 @pytest.fixture(autouse=True)
 def _ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,6 +144,24 @@ def _primary_keys(rows: list[dict[str, object]], column: str) -> set[int]:
     return {int(row[column]) for row in rows}
 
 
+def _matches_seeded_literal(actual: object, expected: object) -> bool:
+    """Compare a returned value to a seeded literal without dropping timezone."""
+    if not isinstance(expected, datetime):
+        return actual == expected
+    observed = actual
+    if isinstance(actual, str):
+        try:
+            observed = datetime.fromisoformat(actual)
+        except ValueError:
+            return False
+    if not isinstance(observed, datetime):
+        return False
+    # Naive values are not UTC. Aware values compare as the same instant.
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        return False
+    return observed == expected
+
+
 @pytest.mark.integration
 def test_suite_sample_sql_and_target_resolution_agree_on_postgres(
     parity_warehouse_dsn: str,
@@ -153,6 +184,26 @@ def test_suite_sample_sql_and_target_resolution_agree_on_postgres(
         if spec.dimension is Dimension.UNIQUENESS:
             assert len(samples) == 1
             assert int(samples[0]["n"]) == len(suite_pks)
+            expected_key = _SEEDED_UNIQUENESS_KEYS[check_id]
+            sample = samples[0]
+            assert set(sample) == {*expected_key, "n"}
+            for column, expected in expected_key.items():
+                assert _matches_seeded_literal(sample[column], expected), (
+                    check_id,
+                    column,
+                    type(sample[column]).__name__,
+                    sample[column],
+                    sample,
+                )
+            for row in check.sample_failures:
+                for column, expected in expected_key.items():
+                    assert _matches_seeded_literal(row[column], expected), (
+                        check_id,
+                        column,
+                        type(row[column]).__name__,
+                        row[column],
+                        row,
+                    )
             assert target_pks == suite_pks - {min(suite_pks)}
             assert min(suite_pks) not in target_pks
         else:
