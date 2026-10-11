@@ -1,5 +1,8 @@
 import json
 
+import pytest
+from tests.settings_isolation import use_isolated_settings
+
 from airflow_dq_agent.agent import run_proposal_agent
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import ExecutablePlanItem, TargetSet
@@ -7,6 +10,11 @@ from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.planning import compile_remediation_plan
 from airflow_dq_agent.traces import candidate_proposal_event, quality_report_event
 from airflow_dq_agent.traces.lineage import plan_event
+
+
+@pytest.fixture(autouse=True)
+def _default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_isolated_settings(monkeypatch)
 
 
 class _TargetSets:

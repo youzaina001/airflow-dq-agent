@@ -3,6 +3,7 @@
 from datetime import timedelta
 
 import pytest
+from tests.settings_isolation import use_isolated_settings
 
 from airflow_dq_agent.agent import run_proposal_agent, safe_proposal_for_xcom
 from airflow_dq_agent.contracts.fingerprints import (
@@ -14,6 +15,11 @@ from airflow_dq_agent.demo import seeded_failure_report
 from airflow_dq_agent.evals import evaluate_proposal
 from airflow_dq_agent.planning.preparation import prepare_plan_review
 from airflow_dq_agent.traces import candidate_proposal_event
+
+
+@pytest.fixture(autouse=True)
+def _default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_isolated_settings(monkeypatch)
 
 
 class _TargetSets:

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.contracts.models import (
     ApplyAdmission,
@@ -48,19 +49,25 @@ STABLE_TASK_IDS = frozenset(
     }
 )
 
-
-class _TaskFlowRef:
-    """Stand-in for an Airflow XComArg so DAG wiring (`>>`, `.output`) can parse."""
-
-    def __init__(self, name: str) -> None:
-        self.__name__ = name
-        self.output = self
-
-    def __rshift__(self, other: object) -> object:
-        return other
-
-    def __rrshift__(self, other: object) -> object:
-        return self
+# Hand-written from call arguments and `approval_gate >> approval` in dags/dq_daily.py.
+# Not derived from the stub: task-id equality is not this proof.
+_EXPECTED_DIRECTED_EDGES = frozenset(
+    {
+        ("run_suite_task", "propose_task"),
+        ("run_suite_task", "audit_candidate_task"),
+        ("propose_task", "audit_candidate_task"),
+        ("run_suite_task", "prepare_plan_task"),
+        ("audit_candidate_task", "prepare_plan_task"),
+        ("prepare_plan_task", "require_approval"),
+        ("require_approval", "approve_remediation_plan"),
+        ("run_suite_task", "admit_apply_task"),
+        ("prepare_plan_task", "admit_apply_task"),
+        ("approve_remediation_plan", "admit_apply_task"),
+        ("run_suite_task", "apply_after_admission_task"),
+        ("prepare_plan_task", "apply_after_admission_task"),
+        ("admit_apply_task", "apply_after_admission_task"),
+    }
+)
 
 
 def load_dq_daily(
@@ -69,8 +76,9 @@ def load_dq_daily(
     llm_mode: str,
     apply_mode: str,
     module_name: str,
-) -> tuple[types.ModuleType, dict[str, Callable[..., Any]], set[str]]:
-    """Parse dags/dq_daily.py with stubbed Airflow and record registered task ids."""
+) -> tuple[types.ModuleType, dict[str, Callable[..., Any]], set[str], frozenset[tuple[str, str]]]:
+    """Parse dags/dq_daily.py with stubbed Airflow and record task ids and edges."""
+    use_settings_without_dotenv(monkeypatch)
     monkeypatch.setenv("WAREHOUSE_DSN", "postgresql+psycopg://dq:dq@localhost:1/unused-warehouse")
     monkeypatch.delenv("READ_DSN", raising=False)
     monkeypatch.delenv("AUDIT_DSN", raising=False)
@@ -88,6 +96,28 @@ def load_dq_daily(
     sdk_module = types.ModuleType("airflow.sdk")
     tasks: dict[str, Callable[..., Any]] = {}
     operator_task_ids: set[str] = set()
+    edges: set[tuple[str, str]] = set()
+
+    def _task_id(node: object) -> str | None:
+        task_id = getattr(node, "task_id", None)
+        return task_id if isinstance(task_id, str) else None
+
+    class _TaskFlowRef:
+        """Stand-in for an Airflow XComArg so DAG wiring (`>>`, `.output`) can parse."""
+
+        def __init__(self, name: str) -> None:
+            self.task_id = name
+            self.__name__ = name
+            self.output = self
+
+        def __rshift__(self, other: object) -> object:
+            downstream = _task_id(other)
+            if downstream is not None:
+                edges.add((self.task_id, downstream))
+            return other
+
+        def __rrshift__(self, other: object) -> object:
+            return self
 
     def _stub_dag(
         *_args: Any, **_kwargs: Any
@@ -103,7 +133,11 @@ def load_dq_daily(
         def register(candidate: Callable[..., Any]) -> Callable[..., Any]:
             tasks[candidate.__name__] = candidate
 
-            def xcom_reference(*_call_args: Any, **_call_kwargs: Any) -> _TaskFlowRef:
+            def xcom_reference(*call_args: Any, **call_kwargs: Any) -> _TaskFlowRef:
+                for value in (*call_args, *call_kwargs.values()):
+                    upstream = _task_id(value)
+                    if upstream is not None:
+                        edges.add((upstream, candidate.__name__))
                 return _TaskFlowRef(candidate.__name__)
 
             xcom_reference.__name__ = candidate.__name__
@@ -141,7 +175,7 @@ def load_dq_daily(
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module, tasks, set(tasks) | operator_task_ids
+    return module, tasks, set(tasks) | operator_task_ids, frozenset(edges)
 
 
 def _passing_evaluation_payload() -> dict[str, Any]:
@@ -252,10 +286,10 @@ def _admission_payload() -> dict[str, Any]:
 def test_apply_mode_off_and_hitl_register_the_same_task_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, _, off_ids = load_dq_daily(
+    _, _, off_ids, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="off", module_name="dq_daily_topology_off"
     )
-    _, _, hitl_ids = load_dq_daily(
+    _, _, hitl_ids, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="hitl", module_name="dq_daily_topology_hitl"
     )
     assert off_ids == hitl_ids, (
@@ -271,7 +305,7 @@ def test_apply_mode_off_and_hitl_register_the_same_task_ids(
 def test_dq_daily_task_graph_is_stable_for_every_mode_pair(
     monkeypatch: pytest.MonkeyPatch, llm_mode: str, apply_mode: str
 ) -> None:
-    _, _, task_ids = load_dq_daily(
+    _, _, task_ids, _ = load_dq_daily(
         monkeypatch,
         llm_mode=llm_mode,
         apply_mode=apply_mode,
@@ -281,8 +315,23 @@ def test_dq_daily_task_graph_is_stable_for_every_mode_pair(
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("llm_mode", LLM_MODES)
+@pytest.mark.parametrize("apply_mode", APPLY_MODES)
+def test_dq_daily_directed_edges_equal_expected_set_for_every_mode_pair(
+    monkeypatch: pytest.MonkeyPatch, llm_mode: str, apply_mode: str
+) -> None:
+    _, _, _, edges = load_dq_daily(
+        monkeypatch,
+        llm_mode=llm_mode,
+        apply_mode=apply_mode,
+        module_name=f"dq_daily_edges_{llm_mode}_{apply_mode}",
+    )
+    assert edges == _EXPECTED_DIRECTED_EDGES
+
+
+@pytest.mark.integration
 def test_require_approval_skips_when_apply_mode_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    module, tasks, _ = load_dq_daily(
+    module, tasks, _, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="off", module_name="dq_daily_skip_approval_off"
     )
     with pytest.raises(module.AirflowSkipException):
@@ -291,7 +340,7 @@ def test_require_approval_skips_when_apply_mode_is_off(monkeypatch: pytest.Monke
 
 @pytest.mark.integration
 def test_admit_apply_skips_when_apply_mode_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    module, tasks, _ = load_dq_daily(
+    module, tasks, _, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="off", module_name="dq_daily_skip_admit_off"
     )
     with pytest.raises(module.AirflowSkipException):
@@ -304,7 +353,7 @@ def test_admit_apply_skips_when_apply_mode_is_off(monkeypatch: pytest.MonkeyPatc
 def test_apply_after_admission_skips_without_calling_apply_plan_when_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module, tasks, _ = load_dq_daily(
+    module, tasks, _, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="off", module_name="dq_daily_skip_apply_off"
     )
 
@@ -325,7 +374,7 @@ def test_apply_after_admission_skips_without_calling_apply_plan_when_off(
 def test_require_approval_skips_blocked_or_failed_plan_in_hitl(
     monkeypatch: pytest.MonkeyPatch, payload_factory: Callable[[], dict[str, Any]]
 ) -> None:
-    module, tasks, _ = load_dq_daily(
+    module, tasks, _, _ = load_dq_daily(
         monkeypatch,
         llm_mode="stub",
         apply_mode="hitl",
@@ -339,7 +388,7 @@ def test_require_approval_skips_blocked_or_failed_plan_in_hitl(
 def test_admit_apply_skips_when_hitl_decision_is_not_approve(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module, tasks, _ = load_dq_daily(
+    module, tasks, _, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="hitl", module_name="dq_daily_skip_admit_reject"
     )
     with pytest.raises(module.AirflowSkipException):
@@ -352,7 +401,7 @@ def test_admit_apply_skips_when_hitl_decision_is_not_approve(
 def test_require_approval_allows_passing_unblocked_plan_in_hitl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, tasks, _ = load_dq_daily(
+    _, tasks, _, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="hitl", module_name="dq_daily_allow_approval_hitl"
     )
     tasks["require_approval"](_passing_evaluation_payload())
@@ -362,7 +411,7 @@ def test_require_approval_allows_passing_unblocked_plan_in_hitl(
 def test_apply_after_admission_invokes_apply_plan_when_hitl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module, tasks, _ = load_dq_daily(
+    module, tasks, _, _ = load_dq_daily(
         monkeypatch, llm_mode="stub", apply_mode="hitl", module_name="dq_daily_apply_hitl"
     )
     calls: list[str] = []

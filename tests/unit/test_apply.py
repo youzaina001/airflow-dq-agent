@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, OperationalError
+from tests.settings_isolation import use_settings_without_dotenv
 
 import airflow_dq_agent.action_definitions as action_definitions
 from airflow_dq_agent.action_definitions import get_governed_action
@@ -34,6 +35,13 @@ from airflow_dq_agent.planning.admission import create_apply_admission
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.traces import InMemoryAuditRepository
 from airflow_dq_agent.traces.lineage import apply_result_event, decision_event, review_event
+
+
+@pytest.fixture(autouse=True)
+def _settings_ignore_developer_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings_without_dotenv(monkeypatch)
+    monkeypatch.delenv("APPLY_MODE", raising=False)
+    monkeypatch.delenv("TRACE_POSTGRES", raising=False)
 
 
 class _RecordingConnection:
@@ -151,8 +159,14 @@ class _CommitTrackingEngine:
     def __init__(self, dsn: str = "postgresql+psycopg://dq:dq@localhost:5433/warehouse") -> None:
         self.transaction = _CommitTrackingTransaction()
         self.url = make_url(dsn)
+        self._opened = False
 
     def begin(self) -> _CommitTrackingTransaction:
+        # A later read-only recovery opens its own transaction. The apply
+        # transaction stays the one tests inspect.
+        if self._opened:
+            return _CommitTrackingTransaction()
+        self._opened = True
         return self.transaction
 
 
@@ -946,6 +960,140 @@ def test_expired_admission_with_committed_result_returns_it_read_only(
     assert second.run_id == first.run_id
     assert len(engine.mutation_sqls()) == inserts_after_first
     kinds = [getattr(event, "kind", None) for event in sink + lineage]  # type: ignore[operator]
+    assert "apply_failed" not in kinds
+
+
+def test_expiry_after_target_resolution_refuses_without_writing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    assert now < admission.expires_at
+    engine = _CommitTrackingEngine()
+    expired_at = admission.expires_at + timedelta(seconds=1)
+    resolved = {"done": False}
+    readings: list[tuple[bool, datetime]] = []
+
+    def clock() -> datetime:
+        reading = expired_at if resolved["done"] else now
+        readings.append((resolved["done"], reading))
+        return reading
+
+    class _ExpireAfterResolve:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def resolve_item(self, _: object, item: object) -> TargetSet:
+            del item
+            raise AssertionError("mutation apply must lock, not resolve")
+
+        def lock_and_resolve(self, _: object, item: object) -> TargetSet:
+            target = item.target_set  # type: ignore[union-attr]
+            resolved["done"] = True
+            return target
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _ExpireAfterResolve
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    try:
+        outcome: object = apply_plan(
+            plan,
+            evaluation,
+            admission,
+            report=report,
+            dry_run=False,
+            engine=engine,  # type: ignore[arg-type]
+            now=now,
+            clock=clock,
+            run_id="unit-expiry-during-resolve",
+            audit_sink=_NoopAuditSink(),
+        )
+    except PermissionError as exc:
+        outcome = exc
+
+    assert isinstance(outcome, PermissionError), outcome
+    assert "apply admission has expired" in str(outcome)
+    assert resolved["done"] is True
+    assert readings
+    assert all(reading < admission.expires_at for after, reading in readings if not after)
+    assert any(reading > admission.expires_at for after, reading in readings if after)
+    assert engine.transaction.rolled_back
+    assert engine.transaction.committed is False
+    statements = [sql for sql, _params in engine.transaction.connection.calls]
+    assert [sql for sql in statements if "record_apply_result" in sql] == []
+    assert [
+        sql for sql in statements if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+    ] == []
+    kinds = [getattr(event, "kind", None) for event in lineage]
+    assert "apply_succeeded" not in kinds
+
+
+def test_committed_admission_expired_during_resolution_returns_original_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retry that is still valid at entry, then expires inside the transaction, stays read-only."""
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    plan, evaluation, admission, report = _approved_quarantine_plan(now)
+    engine = _RecoveryEngine()
+    expired_at = admission.expires_at + timedelta(seconds=1)
+    readings = {"n": 0}
+
+    def clock() -> datetime:
+        readings["n"] += 1
+        # The entry sample is still inside the lifetime. The next sample is the
+        # in-transaction check, which runs before consumed-admission recovery.
+        return now if readings["n"] == 1 else expired_at
+
+    lineage: list[object] = []
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.PostgresTargetSetResolver", _MatchingTargetResolver
+    )
+    monkeypatch.setattr(
+        "airflow_dq_agent.apply.executor.append_event",
+        lambda event, **_: lineage.append(event),
+    )
+
+    first = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        run_id="unit-expiry-committed-first",
+        audit_sink=_NoopAuditSink(),
+    )
+    inserts_after_first = len(engine.mutation_sqls())
+    readings["n"] = 0
+
+    second = apply_plan(
+        plan,
+        evaluation,
+        admission,
+        report=report,
+        dry_run=False,
+        engine=engine,  # type: ignore[arg-type]
+        now=now,
+        clock=clock,
+        run_id="unit-expiry-committed-second",
+        audit_sink=_NoopAuditSink(),
+    )
+
+    assert second.apply_result_id == first.apply_result_id
+    assert second.audit_event_id == first.audit_event_id
+    assert second.run_id == first.run_id
+    assert [(step.rendered.action_id, step.rowcount) for step in second.steps] == [
+        (step.rendered.action_id, step.rowcount) for step in first.steps
+    ]
+    assert len(engine.mutation_sqls()) == inserts_after_first
+    kinds = [getattr(event, "kind", None) for event in lineage]
     assert "apply_failed" not in kinds
 
 

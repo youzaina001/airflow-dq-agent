@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
@@ -54,6 +55,11 @@ class _AdmissionConsumed(PermissionError):
 def _is_serialization_failure(exc: BaseException) -> bool:
     """Detect a SQLSTATE 40001 abort: the txn rolled back, commit fate unknown."""
     return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40001"
+
+
+def _is_expired_admission(exc: BaseException) -> bool:
+    """An in-transaction expiry must still recover a result that already committed."""
+    return isinstance(exc, PermissionError) and "apply admission has expired" in str(exc)
 
 
 class _AuditEventSink(Protocol):
@@ -358,6 +364,37 @@ def _emit_apply_failed(
     append_event(failure)
 
 
+def _read_apply_clock(
+    clock: Callable[[], datetime] | None,
+    now: datetime | None,
+) -> datetime:
+    if clock is not None:
+        return clock()
+    if now is not None:
+        return now
+    return datetime.now(UTC)
+
+
+def _arm_admission_deadline(
+    connection: object,
+    admission: ApplyAdmission,
+    *,
+    clock: Callable[[], datetime] | None,
+    now: datetime | None,
+) -> None:
+    """A spent admission must refuse; a zero timeout would disable the wait bound."""
+    reading = _read_apply_clock(clock, now)
+    remaining_ms = int((admission.expires_at - reading).total_seconds() * 1000)
+    if reading > admission.expires_at or remaining_ms <= 0:
+        raise PermissionError("Refusing apply: apply admission has expired")
+    connection.execute(  # type: ignore[attr-defined]
+        text(f"SET LOCAL statement_timeout = {remaining_ms}")
+    )
+    connection.execute(  # type: ignore[attr-defined]
+        text(f"SET LOCAL lock_timeout = {remaining_ms}")
+    )
+
+
 def _export_supplementary_apply_event(sink: _AuditEventSink, event: AuditEvent) -> None:
     try:
         sink.append(event)
@@ -384,14 +421,16 @@ def apply_plan(
     run_id: str | None = None,
     now: datetime | None = None,
     audit_sink: _AuditEventSink | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> ApplyResult:
     """Recheck a whole-plan admission, lock targets, and mutate only matching rows.
 
     The apply path never accepts a candidate proposal.  It validates the immutable
     admission first, then recomputes each controlled target set in the same database
     transaction that either records a dry run or performs all mutation statements.
+    A timestamp sampled before that transaction does not authorize a later write.
     """
-    applied_at = now or datetime.now(UTC)
+    applied_at = _read_apply_clock(clock, now)
     if dry_run:
         _require_dry_run(plan, evaluation, report=report)
     else:
@@ -437,6 +476,7 @@ def apply_plan(
             _set_controlled_transaction_mode(connection, dry_run=dry_run)
             if not dry_run:
                 assert admission is not None
+                _arm_admission_deadline(connection, admission, clock=clock, now=now)
                 _require_plan_admission(
                     plan,
                     evaluation,
@@ -467,6 +507,8 @@ def apply_plan(
                         AppliedStep(rendered=rendered, estimated_rows=item.target_set.count)
                     )
                     continue
+                assert admission is not None
+                _arm_admission_deadline(connection, admission, clock=clock, now=now)
                 rowcount: int | None = 0
                 if action.mutates:
                     mutation = connection.execute(text(rendered.sql), rendered.params)
@@ -499,6 +541,7 @@ def apply_plan(
             result.audit_event_id = event.event_id
             if not dry_run:
                 assert admission is not None
+                _arm_admission_deadline(connection, admission, clock=clock, now=now)
                 try:
                     _record_apply_result(
                         connection, event=event, result=result, plan=plan, admission=admission
@@ -522,17 +565,22 @@ def apply_plan(
             "committed result could not be recovered"
         ) from exc
     except Exception as exc:
-        if _is_serialization_failure(exc):
-            assert admission is not None
+        if (
+            not dry_run
+            and admission is not None
+            and (_is_serialization_failure(exc) or _is_expired_admission(exc))
+        ):
             recovered = _recover_committed_result(
                 database, plan=plan, evaluation=evaluation, admission=admission
             )
             if recovered is not None:
                 return recovered
-            raise PermissionError(
-                "Refusing apply: apply could not commit under concurrent access and "
-                "its committed result could not be recovered"
-            ) from exc
+            if _is_serialization_failure(exc):
+                raise PermissionError(
+                    "Refusing apply: apply could not commit under concurrent access and "
+                    "its committed result could not be recovered"
+                ) from exc
+            raise
         _emit_apply_failed(
             plan,
             evaluation,
