@@ -3,12 +3,12 @@
 # The remaining ranges are resolved against that constraint file plus
 # constraints-airflow-overlay.txt (SQLAlchemy 2 for postgresql+psycopg).
 apache-airflow-providers-common-ai[openai,mcp,sql]==0.9.0
-apache-airflow-providers-common-compat==1.19.0
-apache-airflow-providers-common-sql==2.1.1
-apache-airflow-providers-fab==3.9.0
-apache-airflow-providers-postgres==7.0.2
-apache-airflow-providers-standard==1.19.0
-opentelemetry-exporter-prometheus==0.65b0
+apache-airflow-providers-common-compat==1.20.0
+apache-airflow-providers-common-sql==2.2.0
+apache-airflow-providers-fab==3.10.0
+apache-airflow-providers-postgres==7.1.0
+apache-airflow-providers-standard==1.20.0
+opentelemetry-exporter-prometheus==0.66b0
 pydantic>=2.10,<3
 pydantic-settings>=2.6,<3
 pydantic-ai-slim[openai,mcp]>=2.0,<3
