@@ -732,3 +732,51 @@ def test_conflict_guard_refuses_items_sharing_quality_evidence() -> None:
 
     with pytest.raises(PermissionError, match="share quality evidence"):
         _refuse_conflicting_plan_items(plan.model_copy(update={"items": [*executable, twin]}))
+
+
+def test_shared_quality_evidence_is_refused_before_apply_admission() -> None:
+    """Two non-identical items that cite one failed check are overlapping, not duplicates."""
+    report = seeded_failure_report()
+    failed = report.get("fact_orders.total_amount.completeness")
+    assert failed is not None
+    scoped = report.model_copy(update={"checks": [failed]})
+    scoped = scoped.model_copy(update={"fingerprint": report_payload_fingerprint(scoped)})
+    evidence = QualityEvidence(check_id=failed.check_id, contract_id=failed.contract_id)
+    plan = compile_remediation_plan(
+        scoped,
+        Proposal(
+            summary="Quarantine the null amounts twice.",
+            root_cause_hypothesis="A required amount was omitted.",
+            candidate_actions=[
+                CandidateAction(
+                    action_id="quarantine_nulls",
+                    evidence=[evidence],
+                    rationale="Copy the null amounts once.",
+                ),
+                CandidateAction(
+                    action_id="quarantine_nulls",
+                    evidence=[evidence, evidence],
+                    rationale="Copy the same null amounts under a second item.",
+                ),
+            ],
+            confidence=0.9,
+        ),
+        target_sets=_TargetSets(),
+    )
+    executable = [item for item in plan.items if isinstance(item, ExecutablePlanItem)]
+    assert plan.blocked is False
+    assert len(executable) == 2
+    assert executable[0].evidence != executable[1].evidence
+    assert {item.evidence[0].check_id for item in executable} == {failed.check_id}
+    evaluation = evaluate_plan(plan)
+    assert evaluation.passed
+    decision, repository = _bound_approval(plan, evaluation)
+
+    with pytest.raises(
+        PermissionError, match="overlapping executable items share quality evidence"
+    ) as refused:
+        create_apply_admission(
+            plan, evaluation, decision, report=scoped, audit_repository=repository
+        )
+    _assert_refusal_is_safe(refused.value)
+    assert "duplicate executable" not in str(refused.value)
