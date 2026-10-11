@@ -13,7 +13,7 @@ opentelemetry-exporter-otlp-proto-common==1.45.0
 opentelemetry-exporter-otlp-proto-grpc==1.45.0
 opentelemetry-exporter-otlp-proto-http==1.45.0
 opentelemetry-proto==1.45.0
-opentelemetry-semantic-conventions==0.66b0
+opentelemetry-semantic-conventions==0.66b1
 # The image includes Airflow's Prometheus exporter. It must match the OTel 1.28 SDK.
 opentelemetry-exporter-prometheus==0.66b0
 # FAB 3.8 supports SQLAlchemy 2 and requires the current PyJWT release.
