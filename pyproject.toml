@@ -39,7 +39,7 @@ airflow = [
   "apache-airflow-providers-fab==3.10.0",
   "apache-airflow-providers-postgres==7.1.0",
   "apache-airflow-providers-common-sql==2.2.0",
-  "opentelemetry-exporter-prometheus==0.66b0",
+  "opentelemetry-exporter-prometheus==0.66b1",
 ]
 dev = [
   "pytest>=8.3",
