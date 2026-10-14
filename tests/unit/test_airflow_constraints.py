@@ -1,4 +1,5 @@
 import importlib.util
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,12 @@ def _merge_module() -> object:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_airflow_overlay_idna_pin_matches_the_lock() -> None:
+    lock = tomllib.loads((OVERLAY.parent / "uv.lock").read_text())
+    version = next(package["version"] for package in lock["package"] if package["name"] == "idna")
+    assert f"idna=={version}\n" in OVERLAY.read_text()
 
 
 def test_overlay_replaces_sqlalchemy_and_keeps_other_pins() -> None:
@@ -54,3 +61,12 @@ def test_airflow_overlay_sqlalchemy_pin_stays_on_2_0() -> None:
     version = pins[0].split("==", 1)[1]
     assert version.startswith("2.0.")
     assert version != "2.1.0"
+
+
+def test_airflow_overlay_otel_pins_match_the_lock() -> None:
+    lock = tomllib.loads((OVERLAY.parent / "uv.lock").read_text())
+    locked = {package["name"]: package["version"] for package in lock["package"]}
+    for line in OVERLAY.read_text().splitlines():
+        if line.startswith("opentelemetry-"):
+            name, version = line.split("==")
+            assert version == locked[name], name
