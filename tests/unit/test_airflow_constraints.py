@@ -64,3 +64,9 @@ def test_airflow_overlay_otel_pins_match_the_lock() -> None:
         if line.startswith("opentelemetry-"):
             name, version = line.split("==")
             assert version == locked[name], name
+
+
+def test_airflow_overlay_idna_pin_matches_the_lock() -> None:
+    lock = tomllib.loads((OVERLAY.parent / "uv.lock").read_text())
+    version = next(package["version"] for package in lock["package"] if package["name"] == "idna")
+    assert f"idna=={version}\n" in OVERLAY.read_text()
