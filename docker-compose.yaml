@@ -1,10 +1,10 @@
-# LocalExecutor Airflow 3.1 + a separate synthetic warehouse.
-# HITL (ApprovalOperator) needs the triggerer on 3.1.x.
+# LocalExecutor Airflow 3.3.2 + a separate synthetic warehouse.
+# HITL (ApprovalOperator) needs the triggerer on 3.3.2.
 # Default APPLY_MODE=off — the DAG never mutates without a human.
 
 x-airflow-common: &airflow-common
   build: .
-  image: airflow-dq-agent:3.1.5
+  image: airflow-dq-agent:3.3.2
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: ${AIRFLOW_AUTH_MANAGER:-airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager}
@@ -102,7 +102,7 @@ services:
     restart: always
 
   catalog:
-    image: airflow-dq-agent:3.1.5
+    image: airflow-dq-agent:3.3.2
     build: .
     user: "${AIRFLOW_UID:-50000}:0"
     environment:

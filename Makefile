@@ -15,7 +15,7 @@ OCR ?= ocr
 help:
 	@echo "make install   - editable install with dev extras (no Airflow); enable commit-msg hook"
 	@echo "make hooks     - point this clone at .githooks (one-line commits, no AI trailers)"
-	@echo "make up        - docker compose: Airflow 3.1 + warehouse Postgres"
+	@echo "make up        - docker compose: Airflow 3.3.2 + warehouse Postgres"
 	@echo "make down      - tear down compose (keep volumes)"
 	@echo "make seed      - recreate synthetic warehouse + known defects"
 	@echo "make test      - unit tests (no docker required)"
