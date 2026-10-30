@@ -1,11 +1,13 @@
-# Overlay on Apache Airflow 3.1.5 constraints-no-providers-3.12.txt.
+# Overlay on Apache Airflow 3.3.2 constraints-no-providers-3.12.txt.
 # The base is published by Apache; these replacements are reviewed in-repo.
-# Official no-providers still pin SQLAlchemy 1.4.54; the warehouse DSN is
-# postgresql+psycopg, which needs SQLAlchemy 2.
-# Airflow core excludes SQLAlchemy 2.1.0 (`>=2.0.50,!=2.1.0`).
+# The 3.3.2 base pins SQLAlchemy 2.0.52. This repo keeps 2.0.54 because the
+# warehouse DSN is postgresql+psycopg, which needs SQLAlchemy 2, and the unit
+# test requires one 2.0 pin other than 2.1.0. apache-airflow-core 3.3.2
+# requires sqlalchemy[asyncio]>=2.0.50 and does not exclude 2.1.0.
 SQLAlchemy==2.0.54
-# pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0; keep the OTel
-# 1.28 set together (Airflow 3.1.5 allows >=1.27.0).
+# pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0. The 3.3.2 base
+# pins API 1.44.0. This overlay keeps the 1.45.0 set so it matches the
+# Prometheus exporter installed from requirements-airflow.txt.
 opentelemetry-api==1.45.0
 opentelemetry-sdk==1.45.0
 opentelemetry-exporter-otlp==1.45.0
@@ -14,10 +16,13 @@ opentelemetry-exporter-otlp-proto-grpc==1.45.0
 opentelemetry-exporter-otlp-proto-http==1.45.0
 opentelemetry-proto==1.45.0
 opentelemetry-semantic-conventions==0.66b0
-# The image includes Airflow's Prometheus exporter. It must match the OTel 1.28 SDK.
+# The 3.3.2 base has no Prometheus exporter pin. 0.66b0 matches SDK 1.45.0.
 opentelemetry-exporter-prometheus==0.66b0
-# FAB 3.8 supports SQLAlchemy 2 and requires the current PyJWT release.
+# Kept origin pin. apache-airflow-core 3.3.2 requires pyjwt>=2.11.0.
+# The 3.3.2 base pins PyJWT 2.13.0.
 PyJWT==2.15.1
-# Airflow 3.1.5 pins googleapis-common-protos 1.72.0, which rejects protobuf 7.
+# Kept origin pins. The 3.3.2 base pins googleapis-common-protos 1.75.3 and
+# protobuf 6.33.6. googleapis-common-protos 1.75.5 accepts protobuf>=6.33.5,<8,
+# so 7.36.2 is allowed. These pins do not repair a conflict in that base.
 googleapis-common-protos==1.75.5
 protobuf==7.36.2

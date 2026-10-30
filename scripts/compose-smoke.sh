@@ -7,6 +7,8 @@ export APPLY_MODE=off
 export TRACE_POSTGRES=true
 
 docker compose up -d --build
+airflow_version="$(docker compose exec -T airflow-scheduler airflow version)"
+printf '%s\n' "$airflow_version" | grep -F '3.3.2'
 docker compose exec -T airflow-scheduler python -m airflow_dq_agent.cli seed
 
 dag_ready_timeout_seconds="${DAG_READY_TIMEOUT_SECONDS:-120}"

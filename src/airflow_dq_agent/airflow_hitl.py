@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from airflow_dq_agent.contracts.models import AuditEvent, DecisionBinding
 from airflow_dq_agent.hitl import audit_then_complete_approval
@@ -13,8 +13,16 @@ if TYPE_CHECKING:
 
     class _ProviderApprovalOperator:
         template_fields: tuple[str, ...]
+        options: list[str]
+        defaults: list[str] | None
+        serialized_params: dict[str, Any]
+        multiple: bool
 
         def __init__(self, **_: Any) -> None: ...
+
+        def execute(self, context: dict[str, Any]) -> Any: ...
+
+        def defer(self, **kwargs: Any) -> NoReturn: ...
 
         def execute_complete(self, context: dict[str, Any], event: dict[str, Any]) -> Any: ...
 
@@ -31,6 +39,9 @@ else:
             template_fields: tuple[str, ...] = ()
 
             def __init__(self, **_: Any) -> None:
+                raise RuntimeError("AuditedApprovalOperator requires the airflow extra")
+
+            def execute(self, context: dict[str, Any]) -> Any:
                 raise RuntimeError("AuditedApprovalOperator requires the airflow extra")
 
             def execute_complete(self, context: dict[str, Any], event: dict[str, Any]) -> Any:
@@ -88,6 +99,27 @@ class AuditedApprovalOperator(_ProviderApprovalOperator):
         self.evaluation_id = evaluation_id
         self.evaluation_fingerprint = evaluation_fingerprint
         super().__init__(**kwargs)
+
+    def execute(self, context: dict[str, Any]) -> Any:
+        from airflow.providers.standard.triggers.hitl import HITLTrigger
+        from airflow.sdk.exceptions import TaskAwaitingInput
+        from airflow.sdk.timezone import utcnow
+
+        try:
+            return super().execute(context)
+        except TaskAwaitingInput as waiting:
+            # shortcut: use the provider's trigger until fast-resume is safe on the pinned core.
+            self.defer(
+                trigger=HITLTrigger(
+                    ti_id=context["task_instance"].id,
+                    options=self.options,
+                    defaults=self.defaults,
+                    params=self.serialized_params,
+                    multiple=self.multiple,
+                    timeout_datetime=utcnow() + waiting.timeout if waiting.timeout else None,
+                ),
+                method_name="execute_complete",
+            )
 
     def execute_complete(self, context: dict[str, Any], event: dict[str, Any]) -> Any:
         # This must precede ``super``: it can skip direct downstream tasks for Reject.
