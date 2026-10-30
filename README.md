@@ -377,7 +377,7 @@ stage.
 
 ## Runtime verification
 
-`make compose-smoke` builds the pinned Airflow 3.1.5/Python 3.12 image, starts Compose
+`make compose-smoke` builds the pinned Airflow 3.3.2/Python 3.12 image, starts Compose
 in stub/shadow mode, seeds the warehouse, runs `dq_daily`, and verifies persisted lineage
 and zero quarantine rows.
 

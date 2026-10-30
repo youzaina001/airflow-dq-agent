@@ -1,6 +1,6 @@
-FROM apache/airflow:3.1.5-python3.12
+FROM apache/airflow:3.3.2-python3.12
 
-ARG AIRFLOW_VERSION=3.1.5
+ARG AIRFLOW_VERSION=3.3.2
 ARG PYTHON_VERSION=3.12
 ARG AIRFLOW_CONSTRAINTS_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-no-providers-${PYTHON_VERSION}.txt"
 

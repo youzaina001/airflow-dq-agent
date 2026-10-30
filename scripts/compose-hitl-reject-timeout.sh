@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Actual Airflow proof for issue #41: Reject and Timeout write zero quarantine rows.
-set -euo pipefail
+set -Eeuo pipefail
+trap 'printf "HITL proof failed at line %s\n" "$LINENO" >&2' ERR
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -178,20 +179,31 @@ wait_for_hitl() {
 }
 
 quality_trace_found() {
-  QID="$(psql_wh "SELECT body ->> 'quality_run_id' FROM dq.traces WHERE kind = 'quality_report' ORDER BY seq DESC LIMIT 1")"
-  [[ -n "$QID" ]]
+  local dag_run_id="$1"
+  QID="$(
+    api_curl -H "$auth_header" \
+      "$API/api/v2/dags/${DAG_ID}/dagRuns/${dag_run_id}/taskInstances/run_suite_task/xcomEntries/return_value" \
+      | python3 -c '
+import json, sys
+value = json.load(sys.stdin).get("value")
+if isinstance(value, str):
+    value = json.loads(value)
+run_id = value.get("run_id") if isinstance(value, dict) else None
+print(run_id if isinstance(run_id, str) else "")
+'
+  )" || return 1
+  [[ "$QID" =~ ^[[:alnum:]_-]+$ ]]
 }
 
 quality_run_id_for() {
   local dag_run_id="$1"
   QID=""
-  poll_until 60 2 "quality_report trace after $dag_run_id" quality_trace_found || exit 1
+  poll_until 60 2 "quality report for DAG run $dag_run_id" quality_trace_found "$dag_run_id" || exit 1
   printf '%s' "$QID"
 }
 
 timeout_trace_found() {
-  QID="$(psql_wh "SELECT body ->> 'quality_run_id' FROM dq.traces WHERE kind = 'human_timed_out' AND seq > ${before_timeout_seq} ORDER BY seq DESC LIMIT 1")"
-  [[ -n "$QID" ]]
+  test "$(psql_wh "SELECT count(*) FROM dq.traces WHERE kind = 'human_timed_out' AND body ->> 'quality_run_id' = '$timeout_qid'")" -ge 1
 }
 
 dag_run_terminal() {
@@ -240,18 +252,16 @@ assert_non_mutating_outcome "$reject_qid" "human_rejected" ""
 
 # --- Timeout (do not respond; HITLTrigger emits timedout=True) ---
 timeout_run="timeout-proof"
-before_timeout_seq="$(psql_wh "SELECT COALESCE(max(seq),0) FROM dq.traces")"
 docker compose exec -T airflow-scheduler airflow dags trigger "$DAG_ID" --run-id "$timeout_run"
 wait_for_hitl "$timeout_run"
+timeout_qid="$(quality_run_id_for "$timeout_run")"
 timeout_wait=$((DQ_HITL_TIMEOUT_SECONDS + 60))
-QID=""
 poll_until "$timeout_wait" 5 "human_timed_out trace" timeout_trace_found \
   || {
     psql_wh "SELECT seq, kind, body ->> 'quality_run_id' FROM dq.traces ORDER BY seq DESC LIMIT 20" >&2 || true
     docker compose exec -T airflow-scheduler airflow tasks states-for-dag-run "$DAG_ID" "$timeout_run" >&2 || true
     exit 1
   }
-timeout_qid="$QID"
 wait_dag_terminal "$timeout_run"
 assert_non_mutating_outcome "$timeout_qid" "human_timed_out" "airflow-timeout"
 
