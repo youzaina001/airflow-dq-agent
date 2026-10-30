@@ -54,7 +54,7 @@ def test_provider_wait_defers_once_with_the_original_deadline_and_request(
         module.__dict__.update(attributes)
         monkeypatch.setitem(sys.modules, name, module)
     path = Path(__file__).resolve().parents[2] / "src/airflow_dq_agent/airflow_hitl.py"
-    spec = importlib.util.spec_from_file_location("wait_adapter_under_test", path)
+    spec = importlib.util.spec_from_file_location("airflow_dq_agent.airflow_hitl", path)
     assert spec is not None and spec.loader is not None
     adapter = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(adapter)
