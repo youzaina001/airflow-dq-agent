@@ -4,17 +4,17 @@
 # warehouse DSN is postgresql+psycopg, which needs SQLAlchemy 2, and the unit
 # test requires one 2.0 pin other than 2.1.0. apache-airflow-core 3.3.2
 # requires sqlalchemy[asyncio]>=2.0.50 and does not exclude 2.1.0.
-SQLAlchemy==2.0.54
+SQLAlchemy==2.1.6
 # pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0. The 3.3.2 base
 # pins API 1.44.0. This overlay keeps the 1.45.0 set so it matches the
 # Prometheus exporter installed from requirements-airflow.txt.
-opentelemetry-api==1.45.0
-opentelemetry-sdk==1.45.0
-opentelemetry-exporter-otlp==1.45.0
-opentelemetry-exporter-otlp-proto-common==1.45.0
-opentelemetry-exporter-otlp-proto-grpc==1.45.0
-opentelemetry-exporter-otlp-proto-http==1.45.0
-opentelemetry-proto==1.45.0
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp==1.45.1
+opentelemetry-exporter-otlp-proto-common==1.45.1
+opentelemetry-exporter-otlp-proto-grpc==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.1
+opentelemetry-proto==1.45.1
 opentelemetry-semantic-conventions==0.66b0
 # The 3.3.2 base has no Prometheus exporter pin. 0.66b0 matches SDK 1.45.0.
 opentelemetry-exporter-prometheus==0.66b0
@@ -24,5 +24,5 @@ PyJWT==2.15.1
 # Kept origin pins. The 3.3.2 base pins googleapis-common-protos 1.75.3 and
 # protobuf 6.33.6. googleapis-common-protos 1.75.5 accepts protobuf>=6.33.5,<8,
 # so 7.36.2 is allowed. These pins do not repair a conflict in that base.
-googleapis-common-protos==1.75.5
+googleapis-common-protos==1.76.0
 protobuf==7.36.2
