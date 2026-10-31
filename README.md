@@ -381,6 +381,12 @@ stage.
 in stub/shadow mode, seeds the warehouse, runs `dq_daily`, and verifies persisted lineage
 and zero quarantine rows.
 
+The image backports [Apache Airflow PR #68741](https://github.com/apache/airflow/pull/68741)
+so a stale worker success cannot fail a queued HITL resume. The build script accepts only
+core 3.3.2 with the original scheduler source hash and fails before patching on a mismatch.
+Remove `scripts/backport_airflow_68741.py` and its Dockerfile step when upgrading to a
+release containing the upstream fix.
+
 `make compose-hitl` runs the real-Airflow HITL/apply proof using
 `examples/dq_external_invoice.py` with restricted read, audit, and apply credentials:
 
