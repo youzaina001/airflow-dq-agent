@@ -8,7 +8,7 @@ apache-airflow-providers-common-sql==2.2.0
 apache-airflow-providers-fab==3.10.0
 apache-airflow-providers-postgres==7.1.0
 apache-airflow-providers-standard==1.20.0
-opentelemetry-exporter-prometheus==0.66b0
+opentelemetry-exporter-prometheus==0.66b1
 pydantic>=2.10,<3
 pydantic-settings>=2.6,<3
 pydantic-ai-slim[openai,mcp]>=2.0,<3
