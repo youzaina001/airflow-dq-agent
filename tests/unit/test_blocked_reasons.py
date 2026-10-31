@@ -1,4 +1,6 @@
 import json
+import re
+from uuid import UUID
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -23,6 +25,7 @@ GENERIC_UNAVAILABLE_REASON = "candidate action is unavailable under the controll
 OMITTED_COVERAGE_REASON = "candidate proposal omitted failed-check coverage"
 
 _FORBIDDEN_LINEAGE_TOKENS = ("sample_failures", "9001", "SHIPPPED", "prompt")
+_HEX_IDENTIFIER = re.compile(r"\b[0-9a-fA-F]{32,}\b")
 
 
 class _NoTargetLookup:
@@ -66,8 +69,9 @@ def _assert_sample_free_blocked_lineage(plan: RemediationPlan, reason: str) -> N
     assert event.kind == "plan_blocked"
     assert reason in event.reasons
     body = json.dumps(event.model_dump(mode="json"))
+    comparable = _HEX_IDENTIFIER.sub("", body)
     for token in _FORBIDDEN_LINEAGE_TOKENS:
-        assert token not in body
+        assert token not in comparable
     assert "c101.invalid" not in body
     assert "secret" not in body.lower()
 
@@ -158,3 +162,18 @@ def test_compiler_blocks_with_bounded_reason_when_the_warehouse_is_unavailable()
     assert plan.blocked_reasons == [TARGET_RESOLUTION_REASON]
     assert "connection refused" not in "".join(plan.blocked_reasons)
     _assert_sample_free_blocked_lineage(plan, TARGET_RESOLUTION_REASON)
+
+
+def test_sample_free_blocked_lineage_ignores_9001_inside_hex_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "airflow_dq_agent.contracts.models.uuid4",
+        lambda: UUID("90010000-0000-4000-8000-000000000000"),
+    )
+    one_failure_report, failed = _one_failure_report()
+    candidate = _candidate("null_fill", failed.check_id, failed.contract_id)
+
+    plan = compile_remediation_plan(one_failure_report, candidate, target_sets=_NoTargetLookup())
+
+    _assert_sample_free_blocked_lineage(plan, UNSUPPORTED_ACTION_REASON)
