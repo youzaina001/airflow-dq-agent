@@ -17,7 +17,7 @@ opentelemetry-exporter-otlp-proto-http==1.45.1
 opentelemetry-proto==1.45.1
 opentelemetry-semantic-conventions==0.66b1
 # The 3.3.2 base has no Prometheus exporter pin. 0.66b1 matches SDK 1.45.1.
-opentelemetry-exporter-prometheus==0.66b1
+opentelemetry-exporter-prometheus==0.66b2
 # Kept origin pin. apache-airflow-core 3.3.2 requires pyjwt>=2.11.0.
 # The 3.3.2 base pins PyJWT 2.13.0.
 PyJWT==2.15.1
