@@ -4,17 +4,17 @@
 # warehouse DSN is postgresql+psycopg, which needs SQLAlchemy 2, and the unit
 # test requires one 2.0 pin other than 2.1.0. apache-airflow-core 3.3.2
 # requires sqlalchemy[asyncio]>=2.0.50 and does not exclude 2.1.0.
-SQLAlchemy==2.0.54
+SQLAlchemy==2.1.8
 # pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0. The 3.3.2 base
 # pins API 1.44.0. This overlay keeps the 1.45.1 set so it matches the
 # Prometheus exporter installed from requirements-airflow.txt.
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
-opentelemetry-exporter-otlp==1.45.1
-opentelemetry-exporter-otlp-proto-common==1.45.1
-opentelemetry-exporter-otlp-proto-grpc==1.45.1
-opentelemetry-exporter-otlp-proto-http==1.45.1
-opentelemetry-proto==1.45.1
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp==1.45.2
+opentelemetry-exporter-otlp-proto-common==1.45.2
+opentelemetry-exporter-otlp-proto-grpc==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-proto==1.45.2
 opentelemetry-semantic-conventions==0.66b1
 # The 3.3.2 base has no Prometheus exporter pin. 0.66b1 matches SDK 1.45.1.
 opentelemetry-exporter-prometheus==0.66b1
