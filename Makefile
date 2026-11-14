@@ -80,12 +80,12 @@ compose-hitl:
 	bash scripts/compose-hitl-crash-retry.sh
 
 lint:
-	$(PYTHON) -m ruff check src tests dags examples
-	$(PYTHON) -m ruff format --check src tests dags examples
+	$(PYTHON) -m ruff check src tests dags examples evals scripts
+	$(PYTHON) -m ruff format --check src tests dags examples evals scripts
 
 fmt:
-	$(PYTHON) -m ruff check --fix src tests dags examples
-	$(PYTHON) -m ruff format src tests dags examples
+	$(PYTHON) -m ruff check --fix src tests dags examples evals scripts
+	$(PYTHON) -m ruff format src tests dags examples evals scripts
 
 format: fmt
 
