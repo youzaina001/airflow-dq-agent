@@ -162,7 +162,16 @@ _DERIVATION_CASES = {
 def test_every_governed_action_derives_its_controlled_params(
     action_id: str, spec: CheckSpec, expected_params: dict[str, object]
 ) -> None:
-    assert get_governed_action(action_id).derive_params(spec) == expected_params
+    governed = get_governed_action(action_id)
+    assert governed.derive_params(spec) == expected_params
+    expected_refs = ("dim_customer",) if action_id == "quarantine_orphans" else ()
+    assert governed.referenced_tables(spec) == expected_refs
+
+
+def test_quarantine_orphans_referenced_tables_fails_closed_without_fk() -> None:
+    non_fk_spec = get_check_spec("fact_orders.total_amount.completeness")
+    with pytest.raises(ValueError, match="not a contracted foreign key"):
+        get_governed_action("quarantine_orphans").referenced_tables(non_fk_spec)
 
 
 @pytest.mark.parametrize(

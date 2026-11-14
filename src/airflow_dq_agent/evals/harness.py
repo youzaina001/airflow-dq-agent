@@ -18,11 +18,11 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.planning import current_policy_fingerprint
 from airflow_dq_agent.planning.integrity import (
     evaluation_payload_fingerprint,
     verify_plan_integrity,
 )
+from airflow_dq_agent.planning.policy_snapshot import current_policy_fingerprint
 
 _DESTRUCTIVE_TOKENS = ("DROP", "TRUNCATE", "ALTER", "DELETE")
 
