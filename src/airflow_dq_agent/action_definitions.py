@@ -40,6 +40,11 @@ class RenderedStep(BaseModel):
 DerivedParams = Callable[[CheckSpec, TableContract, dict[str, Any]], dict[str, Any]]
 RenderAction = Callable[[RemediationAction, TableContract, dict[str, Any], str], RenderedStep]
 ValidateAction = Callable[[TableContract, dict[str, Any]], list[str]]
+ReferencedTables = Callable[[CheckSpec, TableContract], tuple[str, ...]]
+
+
+def _no_referenced_tables(_: CheckSpec, __: TableContract) -> tuple[str, ...]:
+    return ()
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ class GovernedAction:
     _derive_params: DerivedParams
     _render: RenderAction
     _validate: ValidateAction
+    _referenced_tables: ReferencedTables = _no_referenced_tables
 
     @property
     def action_id(self) -> str:
@@ -58,6 +64,10 @@ class GovernedAction:
     @property
     def mutates(self) -> bool:
         return self.metadata.mutates
+
+    def referenced_tables(self, spec: CheckSpec) -> tuple[str, ...]:
+        """Return companion tables consumed when rendering this action for ``spec``."""
+        return self._referenced_tables(spec, get_table_contract(spec.table))
 
     def derive_params(self, spec: CheckSpec) -> dict[str, Any]:
         rule = spec.rule_for(self.action_id)
@@ -166,13 +176,22 @@ def _derive_invalids(
     }
 
 
-def _derive_orphans(
-    spec: CheckSpec, contract: TableContract, params: dict[str, Any]
-) -> dict[str, Any]:
+def _require_foreign_key(spec: CheckSpec, contract: TableContract) -> tuple[str, str, str]:
     column = _require_column(spec, "referential policy does not name a foreign key")
     foreign_key = next((fk for fk in contract.foreign_keys if fk[0] == column), None)
     if foreign_key is None:
         raise ValueError("check column is not a contracted foreign key")
+    return foreign_key
+
+
+def _referenced_tables_orphans(spec: CheckSpec, contract: TableContract) -> tuple[str, ...]:
+    return (_require_foreign_key(spec, contract)[1],)
+
+
+def _derive_orphans(
+    spec: CheckSpec, contract: TableContract, params: dict[str, Any]
+) -> dict[str, Any]:
+    foreign_key = _require_foreign_key(spec, contract)
     return {
         **params,
         "fk_column": foreign_key[0],
@@ -361,6 +380,7 @@ def _register_governed_action(
     derive: DerivedParams,
     render: RenderAction,
     validate: ValidateAction = _validate_no_additional_rules,
+    referenced_tables: ReferencedTables = _no_referenced_tables,
     optional_params: list[str] | None = None,
     notes: str = "",
 ) -> GovernedAction:
@@ -380,6 +400,7 @@ def _register_governed_action(
         derive,
         render,
         validate,
+        referenced_tables,
     )
 
 
@@ -472,6 +493,7 @@ _GOVERNED_ACTIONS: dict[str, GovernedAction] = {
             derive=_derive_orphans,
             render=_render_orphans,
             validate=_validate_orphans,
+            referenced_tables=_referenced_tables_orphans,
         ),
         _register_governed_action(
             "dedupe_keep_min_pk",

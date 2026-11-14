@@ -22,6 +22,7 @@ from airflow_dq_agent.planning.integrity import (
     verify_plan_integrity,
     verify_report_integrity,
 )
+from airflow_dq_agent.planning.policy_snapshot import verify_policy_snapshot
 from airflow_dq_agent.planning.review import build_approval_review
 from airflow_dq_agent.traces.repository import AuditLineageLookup
 
@@ -141,6 +142,7 @@ def create_apply_admission(
     verify_plan_integrity(plan, refusing="admission")
     if plan.blocked:
         raise PermissionError("Refusing admission: remediation plan is blocked")
+    verify_policy_snapshot(plan, refusing="admission", after="evaluation")
     verify_executable_params(plan, report=report, refusing="admission")
     if not evaluation.passed:
         raise PermissionError("Refusing admission: remediation-plan evaluation did not pass")

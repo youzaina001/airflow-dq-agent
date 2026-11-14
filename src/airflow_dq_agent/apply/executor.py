@@ -29,7 +29,6 @@ from airflow_dq_agent.contracts.models import (
     QualitySuiteReport,
     RemediationPlan,
 )
-from airflow_dq_agent.planning import current_policy_fingerprint
 from airflow_dq_agent.planning.integrity import (
     verify_admission_integrity,
     verify_evaluation_integrity,
@@ -40,6 +39,7 @@ from airflow_dq_agent.planning.integrity import (
 from airflow_dq_agent.planning.integrity import (
     warehouse_environment_id as environment_id_from_dsn,
 )
+from airflow_dq_agent.planning.policy_snapshot import verify_policy_snapshot
 from airflow_dq_agent.planning.targets import PostgresTargetSetResolver
 from airflow_dq_agent.traces.lineage import apply_result_event
 from airflow_dq_agent.traces.writer import JsonlAuditSink, append_event
@@ -237,9 +237,7 @@ def _require_plan_admission(
     verify_plan_integrity(plan, refusing="apply")
     verify_evaluation_integrity(plan, evaluation, refusing="apply")
     verify_admission_integrity(plan, evaluation, admission, refusing="apply")
-    current_policy = current_policy_fingerprint(plan)
-    if current_policy != plan.policy_fingerprint or current_policy != admission.policy_fingerprint:
-        raise PermissionError("Refusing apply: policy snapshot drifted after admission")
+    verify_policy_snapshot(plan, admission=admission, refusing="apply", after="admission")
     verify_executable_params(plan, report=report, refusing="apply")
     if connection is not None:
         _refuse_consumed_admission(connection, admission)
@@ -255,8 +253,7 @@ def _require_dry_run(
     verify_report_integrity(report, refusing="dry run")
     verify_plan_integrity(plan, refusing="dry run")
     verify_evaluation_integrity(plan, evaluation, refusing="dry run")
-    if current_policy_fingerprint(plan) != plan.policy_fingerprint:
-        raise PermissionError("Refusing dry run: policy snapshot drifted after evaluation")
+    verify_policy_snapshot(plan, refusing="dry run", after="evaluation")
     verify_executable_params(plan, report=report, refusing="dry run")
 
 
