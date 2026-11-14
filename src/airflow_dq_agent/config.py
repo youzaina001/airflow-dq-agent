@@ -51,10 +51,6 @@ class Settings(BaseSettings):
         return {value.strip() for value in self.hitl_approver_ids.split(",") if value.strip()}
 
     @property
-    def hitl_assigned_users(self) -> list[dict[str, str]]:
-        return [{"id": user_id, "name": user_id} for user_id in sorted(self.hitl_approver_id_set)]
-
-    @property
     def apply_admission_ttl(self) -> timedelta:
         return timedelta(hours=self.apply_admission_ttl_hours)
 

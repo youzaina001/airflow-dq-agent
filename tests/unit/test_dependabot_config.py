@@ -32,3 +32,7 @@ def test_dependabot_weekly_uv_and_github_actions() -> None:
         group = entry["groups"][group_name]
         assert group["patterns"] == ["*"]
         assert group["update-types"] == ["minor", "patch"]
+
+    uv_ignore = by_ecosystem["uv"].get("ignore", [])
+    assert {"dependency-name": "sqlalchemy", "versions": [">= 2.1.0"]} in uv_ignore
+    assert {"dependency-name": "opentelemetry-*"} in uv_ignore
