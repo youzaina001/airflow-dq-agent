@@ -10,7 +10,6 @@ from uuid import uuid4
 from sqlalchemy.exc import SQLAlchemyError
 
 from airflow_dq_agent import check_policy
-from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.fingerprints import canonical_fingerprint
 from airflow_dq_agent.contracts.models import (
@@ -22,16 +21,13 @@ from airflow_dq_agent.contracts.models import (
     RemediationPlan,
     TargetSet,
 )
-from airflow_dq_agent.contracts.tables import get_table_contract
 from airflow_dq_agent.planning.integrity import (
     plan_payload_fingerprint,
 )
 from airflow_dq_agent.planning.integrity import (
     warehouse_environment_id as environment_id_from_dsn,
 )
-from airflow_dq_agent.quality.registry import CheckSpec, get_check_spec
-
-RENDERER_VERSION = "controlled-renderer-v2"
+from airflow_dq_agent.planning.policy_snapshot import policy_snapshot_fingerprint
 
 
 class TargetSetResolver(Protocol):
@@ -46,29 +42,6 @@ class TargetSetResolver(Protocol):
         table: str,
         params: dict[str, object],
     ) -> TargetSet: ...
-
-
-def _policy_fingerprint(specs: Sequence[CheckSpec], action_id: str) -> str:
-    action = get_governed_action(action_id).metadata
-    return canonical_fingerprint(
-        {
-            "contracts": [get_table_contract(spec.table).model_dump(mode="json") for spec in specs],
-            "check_policies": [spec.model_dump(mode="json") for spec in specs],
-            "remediation_rule": action.model_dump(mode="json"),
-            "renderer_version": RENDERER_VERSION,
-        }
-    )
-
-
-def current_policy_fingerprint(plan: RemediationPlan) -> str:
-    """Fingerprint the policy currently governing an already compiled plan."""
-    item_fingerprints: list[str] = []
-    for item in plan.items:
-        if not isinstance(item, ExecutablePlanItem):
-            continue
-        specs = [get_check_spec(evidence.check_id) for evidence in item.evidence]
-        item_fingerprints.append(_policy_fingerprint(specs, item.action_id))
-    return canonical_fingerprint(item_fingerprints)
 
 
 def _blocked_item(
@@ -171,7 +144,7 @@ def compile_remediation_plan(
                     params=justification.params,
                     evidence=tuple(evidence),
                     target_set=target_set,
-                    policy_fingerprint=_policy_fingerprint(specs, requested.action_id),
+                    policy_fingerprint=policy_snapshot_fingerprint(specs, requested.action_id),
                 )
                 items.append(item)
                 covered.update(entry.check_id for entry in evidence)
