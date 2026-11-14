@@ -46,7 +46,7 @@ if settings.registry_path is None:
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
     raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")
 
-# providers-standard 1.12.1 times HITL with execution_timeout (response_timeout is 1.12.2+).
+# Pinned apache-airflow-providers-standard==1.21.0; DQ_HITL_TIMEOUT_SECONDS sets execution_timeout.
 _HITL_TIMEOUT = timedelta(seconds=int(os.environ.get("DQ_HITL_TIMEOUT_SECONDS", "86400")))
 
 

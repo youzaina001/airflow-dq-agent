@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -37,6 +38,8 @@ if settings.registry_path is None:
     register_demo()
 if settings.apply_mode == "hitl" and not settings.hitl_approver_id_set:
     raise RuntimeError("APPLY_MODE=hitl requires at least one HITL_APPROVER_IDS identity")
+
+_HITL_TIMEOUT = timedelta(seconds=int(os.environ.get("DQ_HITL_TIMEOUT_SECONDS", "86400")))
 
 
 @dag(
@@ -142,7 +145,7 @@ def dq_daily() -> None:
             audit_repository=PostgresAuditRepository(settings.audit_dsn or settings.warehouse_dsn),
         ).model_dump(mode="json")
 
-    @task
+    @task(retries=2, retry_delay=timedelta(seconds=5))
     def apply_after_admission_task(
         report_data: dict[str, Any],
         evaluation_data: dict[str, Any],
@@ -191,7 +194,6 @@ def dq_daily() -> None:
         audit_dsn=settings.audit_dsn,
         defaults="Reject",
         fail_on_reject=False,
-        assigned_users=settings.hitl_assigned_users,
         params={
             "approval_note": {
                 "type": "string",
@@ -199,7 +201,7 @@ def dq_daily() -> None:
                 "minLength": 1,
             }
         },
-        response_timeout=timedelta(hours=24),
+        execution_timeout=_HITL_TIMEOUT,
     )
     approval_gate >> approval
     admission = admit_apply_task(report, evaluated, approval.output)
