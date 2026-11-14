@@ -141,7 +141,7 @@ jobs:
         if: ${{ steps.pr-context.outputs.skip != 'true' }}
         # Pinned to v1.12.13 (commit fabbdb2) instead of the moving @main ref.
         # ocr_version pins the npm CLI the action installs (default is latest).
-        uses: alibaba/open-code-review@fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4
+        uses: alibaba/open-code-review@b1dcffb0729f3f2e3e47170968a5014a2e035580
         env:
           # Disable self-update before installation's first `ocr version` call.
           OCR_NO_UPDATE: '1'
