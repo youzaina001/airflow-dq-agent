@@ -91,7 +91,7 @@ eval = [
 [package.metadata]
 requires-dist = [
     { name = "apache-airflow", marker = "extra == 'airflow'", specifier = "==3.3.2" },
-    { name = "apache-airflow-providers-common-ai", extras = ["openai", "mcp", "sql"], marker = "extra == 'airflow'", specifier = "==0.9.0" },
+    { name = "apache-airflow-providers-common-ai", extras = ["openai", "mcp", "sql"], marker = "extra == 'airflow'", specifier = "==1.1.0" },
     { name = "apache-airflow-providers-common-compat", marker = "extra == 'airflow'", specifier = "==1.23.0" },
     { name = "apache-airflow-providers-common-sql", marker = "extra == 'airflow'", specifier = "==2.4.0" },
     { name = "apache-airflow-providers-fab", marker = "extra == 'airflow'", specifier = "==3.10.2" },
@@ -255,17 +255,18 @@ wheels = [
 
 [[package]]
 name = "apache-airflow-providers-common-ai"
-version = "0.9.0"
+version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-airflow" },
     { name = "apache-airflow-providers-common-compat" },
     { name = "apache-airflow-providers-standard" },
     { name = "pydantic-ai-slim" },
+    { name = "structlog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/4d/f9a412673dec713031649edd23eeae75e18e647c0979cc4be02d9fcdc520/apache_airflow_providers_common_ai-0.9.0.tar.gz", hash = "sha256:351cb01400972f4d3eff61e671822fdaa4b6a41cb5d6d7ce6b8a1905c5021180", size = 627781, upload-time = "2026-09-14T14:48:03.857Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/96/532bceac2933546695cbd3559daf3de57d7a3e24981ce5c7aaa8dab4a169/apache_airflow_providers_common_ai-1.1.0.tar.gz", hash = "sha256:f0ac27874c0c32d441bd672c854039b944d190bb6e8567719826e800945035af", size = 1629472, upload-time = "2026-11-01T20:40:59.836Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/00/f24268500514b0a3a7985ebff0bfc4f33b1a06253d1f4c03dc5adade58aa/apache_airflow_providers_common_ai-0.9.0-py3-none-any.whl", hash = "sha256:116c8f6a3bd05f795ec07adcf66af8334cfa16c0b63385452fe7d2131aff0b1f", size = 417159, upload-time = "2026-09-14T14:47:23.243Z" },
+    { url = "https://files.pythonhosted.org/packages/24/a5/8e94b38270b92f52e2fb4f33faec2ea7dff84b56e8118d2b3dda0515b276/apache_airflow_providers_common_ai-1.1.0-py3-none-any.whl", hash = "sha256:df0ff787d0f1b42c344ffd72c1c2e2a15282d49b0df7b4547623667ac3613819", size = 826183, upload-time = "2026-11-01T20:40:57.934Z" },
 ]
 
 [package.optional-dependencies]
@@ -273,6 +274,7 @@ mcp = [
     { name = "pydantic-ai-slim", extra = ["mcp"] },
 ]
 openai = [
+    { name = "openai" },
     { name = "pydantic-ai-slim", extra = ["openai"] },
 ]
 sql = [
