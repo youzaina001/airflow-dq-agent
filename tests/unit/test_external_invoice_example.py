@@ -293,12 +293,21 @@ def test_example_dag_binds_restricted_read_audit_and_apply_dsns(
     assert operator_kwargs[0]["audit_dsn"] is not None
 
 
-def test_example_dag_hitl_timeout_uses_execution_timeout_compatible_with_provider_1_12_1() -> None:
-    """Pinned apache-airflow-providers-standard==1.12.1 has no response_timeout."""
-    source = EXAMPLE_DAG.read_text(encoding="utf-8")
+@pytest.mark.parametrize("dag_path", [EXAMPLE_DAG, REPO / "dags" / "dq_daily.py"])
+def test_dags_align_hitl_operator_timeout_retries_and_omit_assigned_users(dag_path: Path) -> None:
+    """Both DAGs use execution_timeout from DQ_HITL_TIMEOUT_SECONDS, omit assigned_users, and retry apply."""
+    from airflow_dq_agent.config import Settings
+
+    source = dag_path.read_text(encoding="utf-8")
     assert "response_timeout=" not in source
-    assert "execution_timeout=" in source
+    assert "assigned_users=" not in source
+    assert "execution_timeout=_HITL_TIMEOUT" in source
     assert "DQ_HITL_TIMEOUT_SECONDS" in source
+    decorator_block = source[: source.index("def apply_after_admission_task")]
+    apply_decorator = decorator_block[decorator_block.rfind("@task") :]
+    assert "retries=2" in apply_decorator
+    assert "retry_delay=timedelta(seconds=5)" in apply_decorator
+    assert not hasattr(Settings, "hitl_assigned_users")
 
 
 _EXAMPLE_TASK_IDS = frozenset(
@@ -534,6 +543,25 @@ def test_readme_uses_human_decision_and_apply_admission_not_approval_aliases() -
     assert "consumed-admission failure" not in lowered
     assert "Human Decision" in readme
     assert "Apply Admission" in readme
+
+
+def test_documentation_and_makefile_sync_provider_pin_walkthrough_setup_and_integration() -> None:
+    readme = README.read_text(encoding="utf-8")
+    dag = EXAMPLE_DAG.read_text(encoding="utf-8")
+    makefile = (REPO / "Makefile").read_text(encoding="utf-8")
+
+    assert "apache-airflow-providers-standard==1.21.0" in readme
+    assert "apache-airflow-providers-standard==1.21.0" in dag
+    assert "1.12.1" not in readme
+    assert "1.12.1" not in dag
+    assert "site/index.html" in readme
+    assert "site/walkthrough.html" in readme
+    assert "dq-agent setup --dsn" in readme
+
+    phony_line = next(line for line in makefile.splitlines() if line.startswith(".PHONY:"))
+    assert "integration" in phony_line
+    help_section = makefile[makefile.index("help:") : makefile.index("install:")]
+    assert "make integration" in help_section
 
 
 def test_crash_retry_proof_binds_admission_xcom_and_apply_log_identity() -> None:

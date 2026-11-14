@@ -11,6 +11,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "sqlalchemy"
+        versions:
+          - ">= 2.1.0"
+      - dependency-name: "opentelemetry-*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

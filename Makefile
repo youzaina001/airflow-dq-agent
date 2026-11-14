@@ -10,7 +10,7 @@ export WAREHOUSE_DSN ?= postgresql+psycopg://dq:dq@localhost:5433/warehouse
 export TRACES_DIR ?= traces
 OCR ?= ocr
 
-.PHONY: help up down logs seed test eval demo lint fmt format typecheck check install hooks ci catalog compose-smoke compose-shadow review-preview review review-branch compose-hitl
+.PHONY: help up down logs seed test eval integration demo lint fmt format typecheck check install hooks ci catalog compose-smoke compose-shadow review-preview review review-branch compose-hitl
 
 help:
 	@echo "make install   - editable install with dev extras (no Airflow); enable commit-msg hook"
@@ -20,6 +20,7 @@ help:
 	@echo "make seed      - recreate synthetic warehouse + known defects"
 	@echo "make test      - unit tests (no docker required)"
 	@echo "make eval      - eval harness (stub + recorded traces, no live key)"
+	@echo "make integration - Postgres integration tests (testcontainers or TEST_WAREHOUSE_DSN)"
 	@echo "make demo      - suite → stub propose → eval → print the story"
 	@echo "make format    - auto-format and fix lint issues"
 	@echo "make check     - lint, typecheck, and unit tests"

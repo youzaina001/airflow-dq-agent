@@ -79,6 +79,19 @@ def test_airflow_overlay_sqlalchemy_pin_stays_on_2_0() -> None:
     assert version.startswith("2.0.")
     assert version != "2.1.0"
 
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    deps = pyproject["project"]["dependencies"]
+    assert "sqlalchemy[asyncio]>=2.0.36,<2.1" in deps
+    assert "sqlalchemy[asyncio]>=2.0.36,<3" not in deps
+
+    req_lines = [
+        line.strip()
+        for line in (ROOT / "requirements-airflow.txt").read_text().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert "sqlalchemy[asyncio]>=2.0.36,<2.1" in req_lines
+    assert "sqlalchemy[asyncio]>=2.0.36,<3" not in req_lines
+
 
 def test_airflow_overlay_otel_pins_match_the_lock() -> None:
     lock = tomllib.loads((OVERLAY.parent / "uv.lock").read_text())
