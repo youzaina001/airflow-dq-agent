@@ -1,6 +1,6 @@
 # Accept caller-supplied engines on the quality and audit path before the #52 deepening
 
-LedgerLens (invoice-exception-workbench) pins this core and stamps its Reviewer scope by rebinding `make_engine` in three core modules at runtime. If a core change moves engine creation, that scope drops silently: row security hides every hosted staging row, and the completeness check returns `pass` with `0/0` (reproduced against core `5d602428` on 2026-11-22). #58 and #60 will move engine creation, so we add a small seam now, ahead of the #52 deepening order in #111. This adds a seam; it does not deepen anything, and it does not reopen ADR-0001.
+LedgerLens (invoice-exception-workbench) pins this core and stamps its Reviewer scope by rebinding `make_engine` in three core modules at runtime. If a core change moves engine creation, that scope drops silently: row security hides every hosted staging row, and the completeness check returns `pass` with `0/0` (reproduced against core `5d602428` on 2026-11-22). #58 and #60 will move engine creation, so we add a small seam now, ahead of the #52 deepening order in #111. This adds a seam; it does not deepen anything, and it does not reopen ADR-0001. The work is tracked in #150.
 
 The decision:
 
