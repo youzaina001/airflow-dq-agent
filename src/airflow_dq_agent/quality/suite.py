@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import polars as pl
@@ -25,6 +25,9 @@ from airflow_dq_agent.warehouse.db import (
     raise_read_connection_failed,
     resolve_read_dsn,
 )
+
+if TYPE_CHECKING:
+    from airflow_dq_agent.traces.writer import AuditSink
 
 SAMPLE = 20
 
@@ -216,18 +219,43 @@ def run_suite_on_frames(frames: Mapping[str, pl.DataFrame]) -> QualitySuiteRepor
     return report.model_copy(update={"fingerprint": report_payload_fingerprint(report)})
 
 
-def run_quality_suite(dsn: str | None = None) -> QualitySuiteReport:
+def run_quality_suite(
+    dsn: str | None = None,
+    *,
+    read_engine: Engine | None = None,
+    audit_sink: AuditSink | None = None,
+) -> QualitySuiteReport:
+    """Run the suite and record its audit event.
+
+    A caller may supply a ready read engine and an audit sink together; the caller owns
+    their lifetime. Supplying one without the other, or a DSN beside a read engine, is
+    refused so nothing supplied is silently ignored. Supplying neither uses the DSN default.
+    """
+    supplied = _check_supplied(dsn, read_engine, audit_sink)
     try:
-        engine = make_engine(resolve_read_dsn(dsn))
+        engine = read_engine if read_engine is not None else make_engine(resolve_read_dsn(dsn))
         frames = load_frames(engine)
     except (SQLAlchemyError, ValueError):
         raise_read_connection_failed()
     report = run_suite_on_frames(frames)
     # In HITL mode this is a required Postgres audit write; shadow mode retains the
     # supplementary JSONL event only.  Either way per-check samples never leave the
-    # quality process for durable audit.
+    # quality process for durable audit.  A supplied sink is always written.
     from airflow_dq_agent.config import get_settings
     from airflow_dq_agent.traces import record_quality_report
 
-    event = record_quality_report(report, dsn=get_settings().audit_dsn)
+    if supplied:
+        event = record_quality_report(report, audit_sink=audit_sink)
+    else:
+        event = record_quality_report(report, dsn=get_settings().audit_dsn)
     return report.model_copy(update={"audit_event_id": event.event_id})
+
+
+def _check_supplied(
+    dsn: str | None, read_engine: Engine | None, audit_sink: AuditSink | None
+) -> bool:
+    if (read_engine is None) != (audit_sink is None):
+        raise ValueError("run_quality_suite needs both read_engine and audit_sink, or neither")
+    if read_engine is not None and dsn is not None:
+        raise ValueError("run_quality_suite accepts dsn or read_engine, not both")
+    return read_engine is not None
