@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlalchemy.engine import Engine
+from sqlalchemy.sql.elements import TextClause
 from tests.settings_isolation import use_settings_without_dotenv
 
 from airflow_dq_agent.contracts.models import AuditEvent, QualitySuiteReport
@@ -32,6 +33,17 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(f"{WRITER}.make_engine", no_default_engine)
 
 
+@pytest.fixture(
+    params=[("off", "false"), ("off", "true"), ("hitl", "false")],
+    ids=["postgres-off", "trace-postgres", "hitl"],
+)
+def configured_audit(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    apply_mode, trace_postgres = request.param
+    monkeypatch.setenv("APPLY_MODE", apply_mode)
+    monkeypatch.setenv("TRACE_POSTGRES", trace_postgres)
+    monkeypatch.setenv("AUDIT_DSN", "postgresql+psycopg://unused:unused@127.0.0.1:1/unused")
+
+
 class RecordingSink:
     def __init__(self, *, fail: bool = False) -> None:
         self.events: list[AuditEvent] = []
@@ -50,7 +62,7 @@ class RecordingSink:
 
 
 class RecordingConnection:
-    def __init__(self, statements: list[tuple[str, dict[str, Any]]]) -> None:
+    def __init__(self, statements: list[tuple[str, dict[str, object]]]) -> None:
         self._statements = statements
 
     def __enter__(self) -> RecordingConnection:
@@ -59,22 +71,24 @@ class RecordingConnection:
     def __exit__(self, *exc: object) -> None:
         return None
 
-    def execute(self, statement: Any, params: dict[str, Any]) -> None:
+    def execute(self, statement: TextClause, params: dict[str, object]) -> None:
         self._statements.append((str(statement), params))
 
 
 class RecordingEngine:
+    """Implement the transaction interface used by the audit sink."""
+
     def __init__(self) -> None:
-        self.statements: list[tuple[str, dict[str, Any]]] = []
+        self.statements: list[tuple[str, dict[str, object]]] = []
 
     def begin(self) -> RecordingConnection:
         return RecordingConnection(self.statements)
 
 
-def _capture_load_frames(monkeypatch: pytest.MonkeyPatch) -> list[object]:
-    seen: list[object] = []
+def _capture_load_frames(monkeypatch: pytest.MonkeyPatch) -> list[Engine]:
+    seen: list[Engine] = []
 
-    def fake_load_frames(engine: object) -> dict[str, Any]:
+    def fake_load_frames(engine: Engine) -> dict[str, Any]:
         seen.append(engine)
         return {}
 
@@ -87,14 +101,15 @@ def _jsonl_lines(tmp_path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
 
+@pytest.mark.usefixtures("configured_audit")
 def test_suite_reads_through_the_supplied_engine_and_writes_the_supplied_sink(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     seen = _capture_load_frames(monkeypatch)
-    read_engine = object()
+    read_engine = cast(Engine, object())  # The patched frame loader only records identity.
     sink = RecordingSink()
 
-    report = run_quality_suite(read_engine=read_engine, audit_sink=sink)  # type: ignore[arg-type]
+    report = run_quality_suite(read_engine=read_engine, audit_sink=sink)
 
     assert seen == [read_engine]
     assert [r.run_id for r in sink.check_runs] == [report.run_id]
@@ -104,9 +119,10 @@ def test_suite_reads_through_the_supplied_engine_and_writes_the_supplied_sink(
 
 def test_suite_supplied_sink_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     _capture_load_frames(monkeypatch)
+    read_engine = cast(Engine, object())  # The patched frame loader only records identity.
 
     with pytest.raises(RuntimeError, match="scoped audit write refused"):
-        run_quality_suite(read_engine=object(), audit_sink=RecordingSink(fail=True))  # type: ignore[arg-type]
+        run_quality_suite(read_engine=read_engine, audit_sink=RecordingSink(fail=True))
 
 
 @pytest.mark.parametrize(
@@ -129,7 +145,8 @@ def test_suite_refuses_partial_or_conflicting_supply(
     assert seen == []
 
 
-def test_record_quality_report_writes_supplied_sink_even_with_trace_postgres_off(
+@pytest.mark.usefixtures("configured_audit")
+def test_record_quality_report_writes_supplied_sink_regardless_of_audit_settings(
     tmp_path: Path,
 ) -> None:
     sink = RecordingSink()
@@ -165,7 +182,7 @@ def test_record_quality_report_refuses_sink_with_ignored_options(kwargs: dict[st
 
 def test_postgres_sink_writes_through_the_supplied_engine() -> None:
     engine = RecordingEngine()
-    sink = PostgresAuditSink(engine=engine)  # type: ignore[arg-type]
+    sink = PostgresAuditSink(engine=cast(Engine, engine))
 
     event = record_quality_report(green_report(), audit_sink=sink)
 
@@ -176,4 +193,4 @@ def test_postgres_sink_writes_through_the_supplied_engine() -> None:
 
 def test_postgres_sink_refuses_both_dsn_and_engine() -> None:
     with pytest.raises(ValueError, match="PostgresAuditSink"):
-        PostgresAuditSink("postgresql://x/y", engine=RecordingEngine())  # type: ignore[arg-type]
+        PostgresAuditSink("postgresql://x/y", engine=cast(Engine, RecordingEngine()))
