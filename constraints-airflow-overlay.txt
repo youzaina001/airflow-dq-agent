@@ -1,27 +1,27 @@
-# Overlay on Apache Airflow 3.3.2 constraints-no-providers-3.12.txt.
+# Overlay on Apache Airflow 3.4.0 constraints-no-providers-3.12.txt.
 # The base is published by Apache; these replacements are reviewed in-repo.
-# The 3.3.2 base pins SQLAlchemy 2.0.52. This repo keeps 2.0.54 because the
+# The 3.4.0 base pins SQLAlchemy 2.0.55. This repo keeps 2.0.58 because the
 # warehouse DSN is postgresql+psycopg, which needs SQLAlchemy 2, and the unit
-# test requires one 2.0 pin other than 2.1.0. apache-airflow-core 3.3.2
-# requires sqlalchemy[asyncio]>=2.0.50 and does not exclude 2.1.0.
-SQLAlchemy==2.0.54
-# pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0. The 3.3.2 base
-# pins API 1.44.0. This overlay keeps the 1.45.1 set so it matches the
-# Prometheus exporter installed from requirements-airflow.txt.
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
-opentelemetry-exporter-otlp==1.45.1
-opentelemetry-exporter-otlp-proto-common==1.45.1
-opentelemetry-exporter-otlp-proto-grpc==1.45.1
-opentelemetry-exporter-otlp-proto-http==1.45.1
-opentelemetry-proto==1.45.1
-opentelemetry-semantic-conventions==0.66b1
-# The 3.3.2 base has no Prometheus exporter pin. 0.66b1 matches SDK 1.45.1.
-opentelemetry-exporter-prometheus==0.66b1
-# Kept origin pin. apache-airflow-core 3.3.2 requires pyjwt>=2.11.0.
-# The 3.3.2 base pins PyJWT 2.13.0.
+# test requires one 2.0 pin other than 2.1.0. apache-airflow-core 3.4.0
+# requires sqlalchemy[asyncio]>=2.0.50,!=2.1.0.
+SQLAlchemy==2.0.58
+# pydantic-ai-slim>=2.0 requires opentelemetry-api>=1.28.0. The 3.4.0 base
+# already pins this 1.45.2 set; the pins stay so a future base cannot drift
+# from the lock or from the Prometheus exporter in requirements-airflow.txt.
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp==1.45.2
+opentelemetry-exporter-otlp-proto-common==1.45.2
+opentelemetry-exporter-otlp-proto-grpc==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-proto==1.45.2
+opentelemetry-semantic-conventions==0.66b2
+# The 3.4.0 base has no Prometheus exporter pin. 0.66b2 matches SDK 1.45.2.
+opentelemetry-exporter-prometheus==0.66b2
+# Kept origin pin. apache-airflow-core 3.4.0 requires pyjwt>=2.11.0.
+# The 3.4.0 base also pins PyJWT 2.15.1.
 PyJWT==2.15.1
-# Kept origin pins. The 3.3.2 base pins googleapis-common-protos 1.75.3 and
+# Kept origin pins. The 3.4.0 base pins googleapis-common-protos 1.76.0 and
 # protobuf 6.33.6. This overlay keeps protobuf 7.36.2; these pins do not
 # repair inherited provider conflicts.
 googleapis-common-protos==1.76.0
