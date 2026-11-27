@@ -129,8 +129,8 @@ Set one secret under **Settings -> Secrets and variables -> Actions**:
 | --- | --- |
 | `OPENROUTER_API_KEY` | OpenRouter key (`sk-or-...`) |
 
-The workflow pins the action to commit `fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4`
-and the npm CLI to `ocr_version: '1.12.13'`. The action step sets
+The workflow pins the action to commit `d4f568f71d3a9d5c5ec972791b1509e40cd31ad1`
+and the npm CLI to `ocr_version: '1.14.4'`. The action step sets
 `OCR_NO_UPDATE: '1'` before any CLI invocation: otherwise even `ocr version`
 can launch a background npm upgrade that replaces the pinned installation
 while the next command starts. To upgrade, update the action SHA and CLI
