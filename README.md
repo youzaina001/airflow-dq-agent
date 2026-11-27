@@ -232,7 +232,8 @@ credentials = provision_restricted_logins(owner_dsn)
    HITL/Audit Lineage to `AUDIT_DSN`, and apply to `APPLY_DSN`.
 5. Keep `LLM_MODE=stub`. Leave `APPLY_MODE=off` until you intend a Human Decision.
    Then set `APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed
-   `HITL_APPROVER_IDS` identity. Unpause `dq_external_invoice`.
+   `HITL_APPROVER_IDS` Airflow user id (the demo admin is `1`; display names
+   and usernames do not match). Unpause `dq_external_invoice`.
 6. Approve, reject, or let the HITL task time out. Inspect PostgreSQL after each
    outcome — do not treat a skipped Postgres or Airflow run as acceptance.
 

@@ -48,14 +48,10 @@ def parse_approval_output(output: Mapping[str, Any], *, approver_ids: Set[str]) 
     chosen = output.get("chosen_options")
     if not isinstance(chosen, list) or not all(isinstance(option, str) for option in chosen):
         raise PermissionError("Malformed ApprovalOperator output: chosen_options is required")
-    responder = output.get("responded_by_user")
-    actor_id = _actor_field(responder, "id")
-    actor_name = _actor_field(responder, "name")
-    if actor_id is not None and actor_id in approver_ids:
-        actor = actor_id
-    elif actor_name is not None and actor_name in approver_ids:
-        actor = actor_name
-    else:
+    # Match the Airflow user id only. Airflow 3.4 stores the editable, non-unique
+    # display name as "name", so a name match would let a renamed user approve.
+    actor = _actor_field(output.get("responded_by_user"), "id")
+    if actor is None or actor not in approver_ids:
         raise PermissionError("ApprovalOperator responder is not an allow-listed Airflow user")
     note = _note(output.get("params_input"))
     if "Approve" in chosen and not note:

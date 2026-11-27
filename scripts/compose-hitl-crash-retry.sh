@@ -8,7 +8,7 @@ cd "$ROOT"
 export LLM_MODE=stub
 export APPLY_MODE=hitl
 export TRACE_POSTGRES=true
-export HITL_APPROVER_IDS=airflow
+export HITL_APPROVER_IDS=1
 export DQ_HITL_TIMEOUT_SECONDS="${DQ_HITL_TIMEOUT_SECONDS:-90}"
 export AIRFLOW_PYTHONPATH="/opt/airflow/src:/opt/airflow/scripts/compose-hitl-crash"
 export DQ_COMPOSE_CRASH_MARKER="/opt/airflow/traces/.apply-crash-once"

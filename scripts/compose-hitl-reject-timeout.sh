@@ -9,7 +9,7 @@ cd "$ROOT"
 export LLM_MODE=stub
 export APPLY_MODE=hitl
 export TRACE_POSTGRES=true
-export HITL_APPROVER_IDS=airflow
+export HITL_APPROVER_IDS=1
 export DQ_HITL_TIMEOUT_SECONDS="${DQ_HITL_TIMEOUT_SECONDS:-90}"
 
 DAG_FILE="dags/dq_external_invoice.py"
@@ -248,7 +248,7 @@ if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
   exit 1
 fi
 wait_dag_terminal "$reject_run"
-assert_non_mutating_outcome "$reject_qid" "human_rejected" ""
+assert_non_mutating_outcome "$reject_qid" "human_rejected" "1"
 
 # --- Timeout (do not respond; HITLTrigger emits timedout=True) ---
 timeout_run="timeout-proof"

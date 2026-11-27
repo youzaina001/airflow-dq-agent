@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from tests.settings_isolation import isolated_settings
 
 from airflow_dq_agent.action_definitions import get_governed_action
 from airflow_dq_agent.contracts import (
@@ -103,19 +104,47 @@ def test_structured_approval_requires_allowlisted_actor_and_note() -> None:
     assert decision.note == "Reviewed exact target counts."
 
 
-def test_structured_reject_accepts_allowlisted_airflow_username_when_id_is_numeric() -> None:
+def test_structured_reject_accepts_allowlisted_numeric_airflow_user_id() -> None:
+    # Airflow 3.4.0 stores the FAB user id and the display name, not the username.
     decision = parse_approval_output(
         {
             "chosen_options": ["Reject"],
             "params_input": {"approval_note": "Do not copy."},
-            "responded_by_user": {"id": "1", "name": "airflow"},
+            "responded_by_user": {"id": "1", "name": "Airflow Admin"},
             "timedout": False,
         },
-        approver_ids={"airflow"},
+        approver_ids={"1"},
     )
 
     assert decision.decision == "Reject"
-    assert decision.actor == "airflow"
+    assert decision.actor == "1"
+
+
+@pytest.mark.parametrize("approver_ids", [{"Airflow Admin"}, {"airflow"}])
+def test_structured_response_refuses_a_responder_matched_only_by_name(
+    approver_ids: set[str],
+) -> None:
+    # Display names are editable and not unique, so only the user id may match.
+    with pytest.raises(PermissionError, match="not an allow-listed Airflow user"):
+        parse_approval_output(
+            {
+                "chosen_options": ["Approve"],
+                "params_input": {"approval_note": "Looks right."},
+                "responded_by_user": {"id": "2", "name": "Airflow Admin"},
+                "timedout": False,
+            },
+            approver_ids=approver_ids,
+        )
+
+
+def test_demo_approver_default_is_the_admin_user_id_everywhere() -> None:
+    root = Path(__file__).resolve().parents[2]
+    assert isolated_settings().hitl_approver_ids == "1"
+    assert (
+        "HITL_APPROVER_IDS: ${HITL_APPROVER_IDS:-1}" in (root / "docker-compose.yaml").read_text()
+    )
+    for script in ("compose-hitl-reject-timeout.sh", "compose-hitl-crash-retry.sh"):
+        assert "export HITL_APPROVER_IDS=1\n" in (root / "scripts" / script).read_text()
 
 
 def test_structured_timeout_is_not_a_human_approval() -> None:
