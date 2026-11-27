@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 _EXPECTED_LINT_DIRS = ("src", "tests", "dags", "examples", "evals", "scripts")
+_FORBIDDEN_PUBLIC_PATTERNS = re.compile(
+    r"(^|/)AGENTS\.md$|^docs/agents/|(^|/)pr[0-9]+-(handoff|review)\.md$|(^|/)review-follow-up\.md$|(^|/).*-handoff\.md$"
+)
 
 
 def test_ruff_selects_ruf100_and_traces_noqa_is_required() -> None:
@@ -48,3 +52,14 @@ def test_makefile_and_ci_cover_all_python_and_eval_trees() -> None:
         tokens = line.split()
         for directory in _EXPECTED_LINT_DIRS:
             assert directory in tokens, f"ci.yml line {line!r} missing {directory}"
+
+
+def test_no_internal_agent_or_handoff_files_tracked() -> None:
+    tracked = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.splitlines()
+    forbidden = [path for path in tracked if _FORBIDDEN_PUBLIC_PATTERNS.search(path)]
+    assert forbidden == [], f"Forbidden internal agent/handoff files tracked: {forbidden}"
