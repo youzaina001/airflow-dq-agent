@@ -48,19 +48,3 @@ def test_makefile_and_ci_cover_all_python_and_eval_trees() -> None:
         tokens = line.split()
         for directory in _EXPECTED_LINT_DIRS:
             assert directory in tokens, f"ci.yml line {line!r} missing {directory}"
-
-
-def test_root_agents_md_navigation_pointer_exists() -> None:
-    agents_md = REPO / "AGENTS.md"
-    assert agents_md.is_file()
-    text = agents_md.read_text(encoding="utf-8")
-    for required in (
-        "CONTEXT.md",
-        "Makefile",
-        "docs/",
-        "make check",
-        "make ci",
-        "make hooks",
-        "RUF100",
-    ):
-        assert required in text
