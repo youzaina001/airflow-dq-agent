@@ -74,8 +74,8 @@ def test_ocr_version_pin_cannot_be_replaced_by_the_background_updater() -> None:
     step = next(s for s in job["steps"] if s.get("name") == "Run OpenCodeReview")
     env = {**workflow.get("env", {}), **job.get("env", {}), **step.get("env", {})}
     assert env.get("OCR_NO_UPDATE") == "1"
-    assert step["with"]["ocr_version"] == "1.12.13"
-    assert step["uses"] == ("alibaba/open-code-review@fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4")
+    assert step["with"]["ocr_version"] == "1.14.4"
+    assert step["uses"] == ("alibaba/open-code-review@d4f568f71d3a9d5c5ec972791b1509e40cd31ad1")
 
 
 def test_ocr_execution_failure_fails_the_check() -> None:
