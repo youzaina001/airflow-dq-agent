@@ -232,7 +232,8 @@ credentials = provision_restricted_logins(owner_dsn)
    HITL/Audit Lineage to `AUDIT_DSN`, and apply to `APPLY_DSN`.
 5. Keep `LLM_MODE=stub`. Leave `APPLY_MODE=off` until you intend a Human Decision.
    Then set `APPLY_MODE=hitl`, `TRACE_POSTGRES=true`, and an allow-listed
-   `HITL_APPROVER_IDS` identity. Unpause `dq_external_invoice`.
+   `HITL_APPROVER_IDS` Airflow user id (the demo admin is `1`; display names
+   and usernames do not match). Unpause `dq_external_invoice`.
 6. Approve, reject, or let the HITL task time out. Inspect PostgreSQL after each
    outcome — do not treat a skipped Postgres or Airflow run as acceptance.
 
@@ -385,15 +386,13 @@ stage.
 
 ## Runtime verification
 
-`make compose-smoke` builds the pinned Airflow 3.3.2/Python 3.12 image, starts Compose
+`make compose-smoke` builds the pinned Airflow 3.4.0/Python 3.12 image, starts Compose
 in stub/shadow mode, seeds the warehouse, runs `dq_daily`, and verifies persisted lineage
 and zero quarantine rows.
 
-The image backports [Apache Airflow PR #68741](https://github.com/apache/airflow/pull/68741)
-so a stale worker success cannot fail a queued HITL resume. The build script accepts only
-core 3.3.2 with the original scheduler source hash and fails before patching on a mismatch.
-Remove `scripts/backport_airflow_68741.py` and its Dockerfile step when upgrading to a
-release containing the upstream fix.
+Airflow core 3.4.0 includes [Apache Airflow PR #68741](https://github.com/apache/airflow/pull/68741),
+so a stale worker success cannot fail a queued HITL resume. The image needs no local patch;
+the build runs `scripts/check_airflow_68741.py`, which fails if the installed core lacks the fix.
 
 `make compose-hitl` runs the real-Airflow HITL/apply proof using
 `examples/dq_external_invoice.py` with restricted read, audit, and apply credentials:

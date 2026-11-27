@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     llm_mode: LlmMode = "stub"
     apply_mode: ApplyMode = "off"
     apply_admission_ttl_hours: int = Field(default=24, gt=0)
-    hitl_approver_ids: str = "airflow"
+    hitl_approver_ids: str = "1"
     llm_model: str = "openai:gpt-4.1-mini"
     openai_api_key: str | None = None
     openai_base_url: str | None = None

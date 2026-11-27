@@ -1,10 +1,10 @@
-# LocalExecutor Airflow 3.3.2 + a separate synthetic warehouse.
-# HITL (ApprovalOperator) needs the triggerer on 3.3.2.
+# LocalExecutor Airflow 3.4.0 + a separate synthetic warehouse.
+# HITL (ApprovalOperator) needs the triggerer on 3.4.0.
 # Default APPLY_MODE=off — the DAG never mutates without a human.
 
 x-airflow-common: &airflow-common
   build: .
-  image: airflow-dq-agent:3.3.2
+  image: airflow-dq-agent:3.4.0
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: ${AIRFLOW_AUTH_MANAGER:-airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager}
@@ -35,7 +35,7 @@ x-airflow-common: &airflow-common
     REPLAY_TRACE_PATH: ${REPLAY_TRACE_PATH:-evals/fixtures/traces/replay-proposal.json}
     TRACE_POSTGRES: ${TRACE_POSTGRES:-false}
     REGISTRY_PATH:
-    HITL_APPROVER_IDS: ${HITL_APPROVER_IDS:-airflow}
+    HITL_APPROVER_IDS: ${HITL_APPROVER_IDS:-1}
     DQ_HITL_TIMEOUT_SECONDS: ${DQ_HITL_TIMEOUT_SECONDS:-86400}
     TRACES_DIR: /opt/airflow/traces
     AIRFLOW_CONN_WAREHOUSE_POSTGRES: 'postgresql://dq:dq@warehouse:5432/warehouse'
@@ -102,7 +102,7 @@ services:
     restart: always
 
   catalog:
-    image: airflow-dq-agent:3.3.2
+    image: airflow-dq-agent:3.4.0
     build: .
     user: "${AIRFLOW_UID:-50000}:0"
     environment:
