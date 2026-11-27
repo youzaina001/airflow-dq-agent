@@ -11,7 +11,7 @@ def _load_config() -> dict:
     return loaded
 
 
-def test_dependabot_weekly_uv_and_github_actions() -> None:
+def test_dependabot_monthly_uv_and_github_actions() -> None:
     assert CONFIG.is_file()
     config = _load_config()
     assert config["version"] == 2
@@ -21,17 +21,17 @@ def test_dependabot_weekly_uv_and_github_actions() -> None:
     by_ecosystem = {entry["package-ecosystem"]: entry for entry in config["updates"]}
     assert set(by_ecosystem) == {"uv", "github-actions"}
 
-    for ecosystem, group_name in (
-        ("uv", "python-minor-and-patch"),
-        ("github-actions", "github-actions-minor-and-patch"),
-    ):
-        entry = by_ecosystem[ecosystem]
+    for entry in by_ecosystem.values():
         assert entry["directory"] == "/"
-        assert entry["schedule"] == {"interval": "weekly"}
+        assert entry["schedule"] == {"interval": "monthly"}
         assert "reviewers" not in entry
-        group = entry["groups"][group_name]
-        assert group["patterns"] == ["*"]
-        assert group["update-types"] == ["minor", "patch"]
+
+    uv_group = by_ecosystem["uv"]["groups"]["python-minor-and-patch"]
+    assert uv_group["patterns"] == ["*"]
+    assert uv_group["update-types"] == ["minor", "patch"]
+
+    actions_groups = by_ecosystem["github-actions"]["groups"]
+    assert actions_groups == {"github-actions-all": {"patterns": ["*"]}}
 
     uv_ignore = by_ecosystem["uv"].get("ignore", [])
     assert {"dependency-name": "sqlalchemy", "versions": [">= 2.1.0"]} in uv_ignore
