@@ -10,14 +10,18 @@ from airflow_dq_agent.traces.repository import (
     PostgresAuditRepository,
 )
 from airflow_dq_agent.traces.writer import (
+    AuditSink,
+    PostgresAuditSink,
     append_event,
     record_quality_report,
     trace_agent_run,
 )
 
 __all__ = [
+    "AuditSink",
     "InMemoryAuditRepository",
     "PostgresAuditRepository",
+    "PostgresAuditSink",
     "append_event",
     "candidate_proposal_event",
     "quality_report_event",

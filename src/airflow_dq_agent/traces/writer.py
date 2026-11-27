@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from airflow_dq_agent.config import get_settings
 from airflow_dq_agent.contracts.models import (
@@ -82,14 +83,23 @@ class JsonlAuditSink:
 
 
 class PostgresAuditSink:
-    """The source-of-truth append-only audit adapter for HITL mode."""
+    """The source-of-truth append-only audit adapter for HITL mode.
 
-    def __init__(self, dsn: str | None = None) -> None:
+    Built on a DSN (an engine is made per write) or on a caller-owned engine.
+    """
+
+    def __init__(self, dsn: str | None = None, *, engine: Engine | None = None) -> None:
+        if dsn is not None and engine is not None:
+            raise ValueError("PostgresAuditSink accepts dsn or engine, not both")
         self._dsn = dsn
+        self._engine = engine
+
+    def _resolve_engine(self) -> Engine:
+        return self._engine if self._engine is not None else make_engine(self._dsn)
 
     def append(self, event: AuditEvent) -> None:
         body = json.dumps(event.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-        engine = make_engine(self._dsn)
+        engine = self._resolve_engine()
         with engine.begin() as connection:
             connection.execute(
                 text(
@@ -100,7 +110,7 @@ class PostgresAuditSink:
             )
 
     def record_check_runs(self, report: QualitySuiteReport) -> None:
-        engine = make_engine(self._dsn)
+        engine = self._resolve_engine()
         with engine.begin() as connection:
             for index, check in enumerate(report.checks):
                 body = _check_run_body(report, index)
@@ -153,14 +163,27 @@ def record_quality_report(
     directory: Path | None = None,
     dsn: str | None = None,
     mirror_postgres: bool | None = None,
+    audit_sink: AuditSink | None = None,
 ) -> AuditEvent:
-    """Append the report event and its indexed, sample-free per-check records."""
+    """Append the report event and its indexed, sample-free per-check records.
+
+    A supplied audit sink is always written, whatever TRACE_POSTGRES says, and its failure
+    propagates before the JSONL mirror. It cannot be combined with dsn or mirror_postgres,
+    which it would otherwise silently override.
+    """
     event = quality_report_event(report)
-    settings = get_settings()
-    postgres_required = _postgres_required(mirror_postgres)
-    postgres_dsn = dsn or settings.audit_dsn or settings.warehouse_dsn
-    if postgres_required:
-        sink = PostgresAuditSink(postgres_dsn)
+    if audit_sink is not None:
+        if dsn is not None or mirror_postgres is not None:
+            raise ValueError(
+                "record_quality_report accepts audit_sink or dsn/mirror_postgres, not both"
+            )
+        sink: AuditSink | None = audit_sink
+    elif _postgres_required(mirror_postgres):
+        settings = get_settings()
+        sink = PostgresAuditSink(dsn or settings.audit_dsn or settings.warehouse_dsn)
+    else:
+        sink = None
+    if sink is not None:
         sink.record_check_runs(report)
         sink.append(event)
     JsonlAuditSink(directory).append(event)

@@ -1,8 +1,17 @@
-"""The public traces seam must not expose unvalidated decision persistence."""
+"""Public exports for the traces package and writer."""
 
 import importlib
 
 import pytest
+
+
+def test_traces_package_exports_audit_sinks() -> None:
+    from airflow_dq_agent import traces
+    from airflow_dq_agent.traces import AuditSink, PostgresAuditSink, writer
+
+    assert AuditSink is writer.AuditSink
+    assert PostgresAuditSink is writer.PostgresAuditSink
+    assert {"AuditSink", "PostgresAuditSink"} <= set(traces.__all__)
 
 
 def test_traces_package_does_not_export_append_human_decision() -> None:
