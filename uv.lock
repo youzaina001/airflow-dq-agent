@@ -93,7 +93,7 @@ requires-dist = [
     { name = "apache-airflow", marker = "extra == 'airflow'", specifier = "==3.4.0" },
     { name = "apache-airflow-providers-common-ai", extras = ["openai", "mcp", "sql"], marker = "extra == 'airflow'", specifier = "==1.1.0" },
     { name = "apache-airflow-providers-common-compat", marker = "extra == 'airflow'", specifier = "==1.23.1" },
-    { name = "apache-airflow-providers-common-sql", marker = "extra == 'airflow'", specifier = "==2.4.0" },
+    { name = "apache-airflow-providers-common-sql", marker = "extra == 'airflow'", specifier = "==3.1.0" },
     { name = "apache-airflow-providers-fab", marker = "extra == 'airflow'", specifier = "==3.11.1" },
     { name = "apache-airflow-providers-postgres", marker = "extra == 'airflow'", specifier = "==7.1.2" },
     { name = "apache-airflow-providers-standard", marker = "extra == 'airflow'", specifier = "==1.22.0" },
@@ -310,7 +310,7 @@ wheels = [
 
 [[package]]
 name = "apache-airflow-providers-common-sql"
-version = "2.4.0"
+version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-airflow" },
@@ -319,9 +319,9 @@ dependencies = [
     { name = "more-itertools" },
     { name = "sqlparse" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fe/83/addb51c36e20de3121f25a7d83fdd43eb7b15464d7ffe912b12b4cb1f3ca/apache_airflow_providers_common_sql-2.4.0.tar.gz", hash = "sha256:363f89dab28bdb00e9090a50476a71795b8237adb0b1768c9490b805b1868e0d", size = 161884, upload-time = "2026-10-24T18:48:44.92Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/b7/11a37c78133ae43bebf9e7aeec95a61a06f5991cb7e7fd206aac6d175a77/apache_airflow_providers_common_sql-3.1.0.tar.gz", hash = "sha256:c244486f67e8400d4d2d0a0d69c82b969e1af137e369222b10fd5199e6e2d5b2", size = 169685, upload-time = "2026-11-23T19:16:47.751Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/dc/802061fa7f25f41e114a27986f21dd772c14458091328739733b9f78c4c4/apache_airflow_providers_common_sql-2.4.0-py3-none-any.whl", hash = "sha256:1b0b1364d92df2390f5b4278dc570061f2f81b9c7ad61e0467c9f9cc3159781e", size = 103189, upload-time = "2026-10-24T18:48:15.379Z" },
+    { url = "https://files.pythonhosted.org/packages/37/cb/cccdc76fd33496820c62d08dd0b0e1b3edf04a7c566aea3b58cb92f1af0c/apache_airflow_providers_common_sql-3.1.0-py3-none-any.whl", hash = "sha256:aaf77ce7bcae3b48f31947c0acc90c4db21aaa734bfa46038c2565fce323ca87", size = 106136, upload-time = "2026-11-23T19:16:20.311Z" },
 ]
 
 [[package]]

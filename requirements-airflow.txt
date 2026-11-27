@@ -4,7 +4,7 @@
 # constraints-airflow-overlay.txt (SQLAlchemy 2.0.58 for postgresql+psycopg).
 apache-airflow-providers-common-ai[openai,mcp,sql]==1.1.0
 apache-airflow-providers-common-compat==1.23.1
-apache-airflow-providers-common-sql==2.4.0
+apache-airflow-providers-common-sql==3.1.0
 apache-airflow-providers-fab==3.11.1
 apache-airflow-providers-postgres==7.1.2
 apache-airflow-providers-standard==1.22.0
